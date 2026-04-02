@@ -3,14 +3,14 @@ import { App, MarkdownRenderer, Component } from "obsidian";
 import type { Annotation } from "../bridge";
 
 /** Type → display info mapping. */
-const TYPE_INFO: Record<string, { label: string; icon: string; color: string }> = {
-    note:       { label: "Note",       icon: "lucide-pen-line",          color: "86, 154, 222" },
-    question:   { label: "Question",   icon: "lucide-help-circle",       color: "236, 177, 0" },
-    todo:       { label: "Todo",       icon: "lucide-circle-check",      color: "72, 198, 123" },
-    crossref:   { label: "Cross-ref",  icon: "lucide-arrow-up-right",    color: "168, 130, 214" },
-    apparatus:  { label: "Apparatus",  icon: "lucide-git-branch",        color: "198, 120, 95" },
-    translation:{ label: "Translation",icon: "lucide-languages",         color: "100, 180, 160" },
-    bare:       { label: "Annotation", icon: "lucide-message-square",    color: "136, 136, 136" },
+const TYPE_INFO: Record<string, { label: string; color: string }> = {
+    note:       { label: "Note",        color: "86, 154, 222" },
+    question:   { label: "Question",    color: "236, 177, 0" },
+    todo:       { label: "Todo",        color: "72, 198, 123" },
+    crossref:   { label: "Cross-ref",   color: "168, 130, 214" },
+    apparatus:  { label: "Apparatus",   color: "198, 120, 95" },
+    translation:{ label: "Translation", color: "100, 180, 160" },
+    bare:       { label: "Annotation",  color: "136, 136, 136" },
 };
 
 function getTypeInfo(type: string) {
@@ -27,25 +27,6 @@ function certLabel(certainty: string): string {
 function isLinkClick(e: MouseEvent): boolean {
     const target = e.target as HTMLElement;
     return !!target.closest("a.internal-link, a.external-link, a[href]");
-}
-
-function renderIcon(container: HTMLElement, iconId: string) {
-    const svg = container.createSvg("svg", {
-        attr: {
-            class: "svg-icon annotation-icon",
-            width: "16",
-            height: "16",
-            viewBox: "0 0 24 24",
-            fill: "none",
-            stroke: "currentColor",
-            "stroke-width": "2",
-            "stroke-linecap": "round",
-            "stroke-linejoin": "round",
-        },
-    });
-    // Use Obsidian's built-in icon rendering
-    const useEl = svg.createSvg("use");
-    useEl.setAttributeNS("http://www.w3.org/1999/xlink", "href", `#${iconId}`);
 }
 
 /**
@@ -70,12 +51,9 @@ export class CalloutWidget extends WidgetType {
         const wrapper = document.createElement("div");
         wrapper.className = "annotation-callout";
         wrapper.style.setProperty("--callout-color", info.color);
-        wrapper.title = this.annotation.original;
 
         // Header
         const header = wrapper.createDiv({ cls: "annotation-callout-title" });
-
-        renderIcon(header, info.icon);
 
         const titleText = header.createSpan({ cls: "annotation-callout-title-text" });
         titleText.textContent = info.label + certLabel(this.annotation.certainty);
@@ -163,9 +141,6 @@ export class PillWidget extends WidgetType {
         wrapper.style.setProperty("--callout-color", info.color);
         wrapper.title = this.annotation.original;
 
-        // Icon
-        renderIcon(wrapper, info.icon);
-
         // Certainty mark
         if (this.annotation.certainty === "tentative") {
             const cert = wrapper.createSpan({ cls: "annotation-pill-certainty annotation-certainty-tentative" });
@@ -188,12 +163,6 @@ export class PillWidget extends WidgetType {
                 this.sourcePath,
                 this.component,
             );
-        }
-
-        // Date
-        if (this.annotation.date) {
-            const dateEl = wrapper.createSpan({ cls: "annotation-pill-date" });
-            dateEl.textContent = this.annotation.date;
         }
 
         // Click → expand to raw source (unless clicking a link)
