@@ -2,6 +2,7 @@ import { FileSystemAdapter, Plugin } from "obsidian";
 import { WasmBridge } from "./bridge";
 import { DEFAULT_SETTINGS, PluginSettings } from "./config";
 import { createLiveModeExtension } from "./renderer/live-mode";
+import { scopeHighlightExtension } from "./renderer/scope-highlight";
 import { AnnotationSettingTab } from "./settings";
 import { AnnotationPanelView, ANNOTATION_PANEL_VIEW_TYPE } from "./views/annotation-panel";
 
@@ -29,6 +30,7 @@ export default class AnnotationPlugin extends Plugin {
 
         // Live editing-mode renderer
         this.registerEditorExtension(createLiveModeExtension(this));
+        this.registerEditorExtension(scopeHighlightExtension());
 
         // Register annotation side panel view
         this.registerView(

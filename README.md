@@ -130,8 +130,24 @@ Block annotations always render as foldable callouts regardless of the display m
 - **Cursor near annotation**: The widget disappears and the raw `<!-- -->` comment is shown, so you can edit it directly
 - **Click widget body**: Places the cursor at the annotation, expanding it for editing
 - **Click fold toggle** (block callouts): Collapses/expands the body
-- **Hover**: Tooltip shows the full raw source
+- **Hover over annotation**: Highlights the text the annotation applies to, based on its scope (see below)
 - **Links in annotations**: Wikilinks (`[[...]]`) and external links navigate normally
+
+### Scope highlighting
+
+When you hover over an inline annotation (pill or marker), the plugin highlights the text the annotation refers to:
+
+| Scope | What gets highlighted |
+|-------|-----------------------|
+| `_` | 1 preceding word |
+| `__` | 2 preceding words |
+| `\p` | Current paragraph |
+| `\pp` | Current + preceding paragraph |
+| `\f` | Current page (from last form-feed) |
+| `^"text"` | The nearest preceding occurrence of "text" |
+| _(none)_ | The preceding sentence (default) |
+
+The sentence boundary detection (for the default scope) uses the [sentenza](https://github.com/user/sentenza) library, a multilingual rule-based sentence splitter supporting 244+ languages.
 
 ## Installation
 
@@ -140,6 +156,7 @@ Block annotations always render as foldable callouts regardless of the display m
 - [Rust](https://rustup.rs/) toolchain
 - [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
 - Node.js and npm
+- The [sentenza](https://github.com/user/sentenza) crate checked out as a sibling directory (expected at `../sentenza` relative to this repo)
 - (Optional) [binaryen](https://github.com/WebAssembly/binaryen) for `wasm-opt` binary size optimization
 
 ### Build and install

@@ -1,6 +1,8 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { App, MarkdownRenderer, Component } from "obsidian";
 import type { Annotation } from "../bridge";
+import { WasmBridge } from "../bridge";
+import { dispatchScopeHighlight, clearScopeHighlight } from "./scope-highlight";
 
 /** Type → display info mapping. */
 const TYPE_INFO: Record<string, { label: string; color: string }> = {
@@ -27,6 +29,26 @@ function certLabel(certainty: string): string {
 function isLinkClick(e: MouseEvent): boolean {
     const target = e.target as HTMLElement;
     return !!target.closest("a.internal-link, a.external-link, a[href]");
+}
+
+/** Add mouseenter/mouseleave handlers to highlight the annotation's scope range. */
+function addScopeHoverHandlers(
+    el: HTMLElement,
+    view: EditorView,
+    annotation: Annotation,
+    charStart: number,
+    bridge: WasmBridge,
+): void {
+    el.addEventListener("mouseenter", () => {
+        const content = view.state.doc.toString();
+        const range = bridge.resolveScopeRange(content, charStart, annotation.scope, "en");
+        if (range && range.start < range.end) {
+            dispatchScopeHighlight(view, range.start, range.end);
+        }
+    });
+    el.addEventListener("mouseleave", () => {
+        clearScopeHighlight(view);
+    });
 }
 
 /**
@@ -130,6 +152,7 @@ export class PillWidget extends WidgetType {
         private readonly app: App,
         private readonly sourcePath: string,
         private readonly component: Component,
+        private readonly bridge: WasmBridge,
     ) {
         super();
     }
@@ -139,7 +162,6 @@ export class PillWidget extends WidgetType {
         const wrapper = document.createElement("span");
         wrapper.className = `annotation-pill annotation-pill-${this.annotation.annotation_type}`;
         wrapper.style.setProperty("--callout-color", info.color);
-        wrapper.title = this.annotation.original;
 
         // Certainty mark
         if (this.annotation.certainty === "tentative") {
@@ -177,6 +199,9 @@ export class PillWidget extends WidgetType {
             }, 0);
         });
 
+        // Hover → highlight scoped text
+        addScopeHoverHandlers(wrapper, view, this.annotation, this.charStart, this.bridge);
+
         return wrapper;
     }
 
@@ -198,6 +223,7 @@ export class MarkerWidget extends WidgetType {
         private readonly charStart: number,
         private readonly charEnd: number,
         private readonly index: number,
+        private readonly bridge: WasmBridge,
     ) {
         super();
     }
@@ -207,7 +233,6 @@ export class MarkerWidget extends WidgetType {
         const wrapper = document.createElement("sup");
         wrapper.className = "annotation-marker";
         wrapper.style.setProperty("--callout-color", info.color);
-        wrapper.title = this.annotation.original;
 
         // Type letter + certainty mark
         const label = info.label.charAt(0);
@@ -225,6 +250,9 @@ export class MarkerWidget extends WidgetType {
                 view.focus();
             }, 0);
         });
+
+        // Hover → highlight scoped text
+        addScopeHoverHandlers(wrapper, view, this.annotation, this.charStart, this.bridge);
 
         return wrapper;
     }

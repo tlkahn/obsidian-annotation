@@ -23,11 +23,22 @@ bridge.ts ── loads WASM, deserializes JSON to TypeScript Annotation[]
   │
   ▼
 live-mode.ts ── CM6 EditorView.decorations.compute()
-  │                     │
-  ├─ CalloutWidget      ├─ PillWidget       ├─ MarkerWidget
-  │  (block form)       │  (compact/pill)   │  (compact/footnote)
-  ▼                     ▼                   ▼
+  │                     │                               │
+  ├─ CalloutWidget      ├─ PillWidget                   ├─ MarkerWidget
+  │  (block form)       │  (compact/pill)               │  (compact/footnote)
+  ▼                     ▼                               ▼
 DOM widgets replace <!-- --> in editor, expand on cursor proximity
+                        │                               │
+                        └──── mouseenter/mouseleave ────┘
+                                      │
+                                      ▼
+              scope-highlight.ts ── CM6 StateEffect/StateField
+                                      │
+                                      ▼
+              scope_resolver.rs ── resolve scope to UTF-16 range
+              (via WASM)              │
+                                      ▼
+                              sentenza (sentence splitting)
 ```
 
 ## DSL Syntax
@@ -122,7 +133,8 @@ Letter-repetition (`\pp`) and underscore-suffix (`\p__`) are equivalent. Count =
 
 - Loads `.wasm` binary from plugin directory via `FileSystemAdapter.readBinary()`
 - Calls `initSync()` (synchronous WASM init from bytes)
-- Single function: `parseAnnotations(content) -> Annotation[]`
+- `parseAnnotations(content) -> Annotation[]` -- parse all annotations
+- `resolveScopeRange(content, charStart, scope, lang) -> ScopeRange | null` -- resolve a scope to a concrete UTF-16 range (called on demand during hover)
 
 ### Live Mode (`live-mode.ts`)
 
@@ -144,11 +156,13 @@ Letter-repetition (`\pp`) and underscore-suffix (`\p__`) are equivalent. Count =
 - Inline `<span>` with type-colored background tint and border
 - Icon + certainty mark + body (truncated at 60 chars, Markdown-rendered) + date
 - Click places cursor at annotation start (except link clicks)
+- Hover highlights the scoped text range in the editor
 
 **MarkerWidget** (compact annotations, footnote mode):
 - Superscript `<sup>` with type letter + certainty mark (e.g., "N?")
 - Type-colored text
 - Click places cursor at annotation start
+- Hover highlights the scoped text range in the editor
 
 All widgets use `setTimeout(() => view.dispatch(...), 0)` to defer cursor placement outside the mousedown handler.
 
@@ -175,6 +189,8 @@ All widgets use `setTimeout(() => view.dispatch(...), 0)` to defer cursor placem
 
 Colors are passed as CSS `--callout-color` RGB triplets, enabling `rgb()` and `rgba()` usage in stylesheets.
 
+See [PROPOSED_TYPES.md](PROPOSED_TYPES.md) for additional philological annotation types under consideration (`nb`, `em`, `crux`, `var`, `lac`, `gl`, `par`, `sic`).
+
 ## Build System
 
 - **Rust -> WASM**: `wasm-pack build crates/wasm --target web --release` (optional `wasm-opt -Oz`)
@@ -184,9 +200,44 @@ Colors are passed as CSS `--callout-color` RGB triplets, enabling `rgb()` and `r
 
 ## Testing
 
-- **Rust**: `cargo test -p annotation-core` -- unit tests per module (types, scanner, compact, block) + integration tests in parser
-- **TypeScript**: `vitest run` -- JSON deserialization tests in `src/__tests__/bridge.test.ts`
-- **Manual verification**: symlink/copy plugin into test vault, check live rendering in edit mode
+- **Rust**: `cargo test -p annotation-core` -- unit tests per module (types, scanner, compact, block, scope_resolver) + integration tests in parser
+- **TypeScript**: `vitest run` -- JSON deserialization tests in `src/__tests__/bridge.test.ts` (Annotation + ScopeRange)
+- **Manual verification**: symlink/copy plugin into test vault, check live rendering and scope hover highlighting in edit mode
+
+### Scope Highlight (`scope-highlight.ts`, `scope_resolver.rs`)
+
+Hovering over a PillWidget or MarkerWidget highlights the text the annotation's scope refers to.
+
+**CM6 mechanism** (`scope-highlight.ts`):
+- `StateEffect<{from, to} | null>` to set/clear the highlight range
+- `StateField<DecorationSet>` holds a `Decoration.mark({ class: "annotation-scope-highlight" })`
+- Provided via `EditorView.decorations.from(field)`, independent of the main decoration compute (no re-parsing on hover)
+- Helpers: `dispatchScopeHighlight(view, from, to)`, `clearScopeHighlight(view)`
+
+**Scope resolver** (`scope_resolver.rs`):
+- `resolve_scope_range(content, char_start, scope, lang) -> Option<(usize, usize)>` returns UTF-16 offsets
+- Resolution per scope type:
+  - `Words(n)`: walk backward from `char_start`, skip trailing whitespace, count N whitespace-delimited tokens
+  - `Adjacency` (default): extract current paragraph before annotation, split with `sentenza::split_sentences(text, lang)`, take last sentence, locate via `rfind` in original text
+  - `Paragraph(n)`: find N double-newline (`\n\n`) boundaries before annotation
+  - `Page(n)`: find N form-feed (`\x0C`) boundaries before annotation
+  - `Anchor("text")`: `rfind` the anchor string before annotation
+- UTF-16/byte offset conversion via `utf16_to_byte()` helper; reuses `scanner::utf16_len()` for byte-to-UTF-16
+
+**WASM export** (`crates/wasm/src/lib.rs`):
+- `resolve_scope_range(content, char_start, scope_json, lang) -> String` -- accepts scope as JSON, returns `{"start":N,"end":N}` or `"null"`
+- Called on demand per hover event (not during annotation parsing)
+
+**Widget integration** (`widgets.ts`):
+- `addScopeHoverHandlers(el, view, annotation, charStart, bridge)` attaches `mouseenter`/`mouseleave` to the widget DOM
+- `mouseenter`: calls `bridge.resolveScopeRange()`, dispatches `setScopeHighlight` effect
+- `mouseleave`: dispatches clear effect
+- Both PillWidget and MarkerWidget receive `WasmBridge` via constructor
+
+**Sentence splitting dependency**:
+- `annotation-core` depends on `sentenza` (local path `../../../sentenza`)
+- Sentenza wraps `sentencex` (rule-based, 244+ languages) with language-specific preprocessing
+- Only used for `Adjacency` scope; other scope types are purely structural (word/paragraph/page boundaries)
 
 ## Design Decisions
 
@@ -203,3 +254,7 @@ Colors are passed as CSS `--callout-color` RGB triplets, enabling `rgb()` and `r
 6. **Link passthrough**: Wikilinks (`[[...]]`) and external links (`[text](url)`) rendered inside annotation widgets navigate normally instead of entering edit mode. This is implemented by checking `isLinkClick(e)` before dispatching cursor placement.
 
 7. **Scope generalization**: The underscore-suffix notation (`\p__` = 2 paragraphs) was added alongside letter-repetition (`\pp`) for consistency with the word scope (`__` = 2 words). Both notations are equivalent and interchangeable.
+
+8. **On-demand scope resolution**: Scope ranges are computed per hover event rather than pre-computed during parsing. This avoids the cost of resolving all scopes on every keystroke (the decoration `compute` runs on every doc/selection change) and avoids passing the language parameter through the parser. The WASM call on hover is fast enough (~sub-ms for a single annotation).
+
+9. **Sentence splitting via sentenza**: The `Adjacency` (default) scope highlights the preceding sentence, requiring sentence boundary detection. Rather than a naive regex split on `.!?`, the plugin delegates to `sentenza`, a dedicated multilingual sentence splitter. This handles abbreviations, dates (e.g., "Jan. 15"), and non-Latin punctuation correctly.

@@ -46,12 +46,12 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                     );
                 } else if (isFootnoteMode) {
                     // Compact annotations in footnote mode get marker widget
-                    widget = new MarkerWidget(ann, start, end, markerIndex++);
+                    widget = new MarkerWidget(ann, start, end, markerIndex++, plugin.bridge);
                 } else {
                     // Compact annotations in default mode get pill widget
                     widget = new PillWidget(
                         ann, start, end,
-                        plugin.app, file.path, plugin,
+                        plugin.app, file.path, plugin, plugin.bridge,
                     );
                 }
 

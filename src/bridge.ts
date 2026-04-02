@@ -17,9 +17,15 @@ export interface Annotation {
     original: string;
 }
 
+export interface ScopeRange {
+    start: number;
+    end: number;
+}
+
 export class WasmBridge {
     private initialized = false;
     private parseAnnotationsFn: ((content: string) => string) | null = null;
+    private resolveScopeRangeFn: ((content: string, charStart: number, scopeJson: string, lang: string) => string) | null = null;
 
     async init(pluginDir: string, adapter: FileSystemAdapter): Promise<void> {
         if (this.initialized) return;
@@ -30,6 +36,7 @@ export class WasmBridge {
         const wasmModule = await import("../crates/wasm/pkg/annotation_wasm");
         wasmModule.initSync({ module: wasmBinary });
         this.parseAnnotationsFn = wasmModule.parse_annotations;
+        this.resolveScopeRangeFn = wasmModule.resolve_scope_range;
 
         this.initialized = true;
         console.log("[Annotation] WASM initialized successfully");
@@ -40,5 +47,14 @@ export class WasmBridge {
             throw new Error("[Annotation] WASM not initialized. Call init() first.");
         }
         return JSON.parse(this.parseAnnotationsFn(content));
+    }
+
+    resolveScopeRange(content: string, charStart: number, scope: Annotation["scope"], lang: string): ScopeRange | null {
+        if (!this.initialized || !this.resolveScopeRangeFn) {
+            return null;
+        }
+        const result = this.resolveScopeRangeFn(content, charStart, JSON.stringify(scope), lang);
+        if (result === "null") return null;
+        return JSON.parse(result);
     }
 }

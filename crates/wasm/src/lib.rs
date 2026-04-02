@@ -1,7 +1,21 @@
 use wasm_bindgen::prelude::*;
 use annotation_core::parser;
+use annotation_core::types::Scope;
+use annotation_core::scope_resolver;
 
 #[wasm_bindgen]
 pub fn parse_annotations(content: &str) -> String {
     serde_json::to_string(&parser::parse_annotations(content)).unwrap_or_default()
+}
+
+#[wasm_bindgen]
+pub fn resolve_scope_range(content: &str, char_start: usize, scope_json: &str, lang: &str) -> String {
+    let scope: Scope = match serde_json::from_str(scope_json) {
+        Ok(s) => s,
+        Err(_) => return "null".to_string(),
+    };
+    match scope_resolver::resolve_scope_range(content, char_start, &scope, lang) {
+        Some((start, end)) => format!("{{\"start\":{},\"end\":{}}}", start, end),
+        None => "null".to_string(),
+    }
 }

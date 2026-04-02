@@ -202,3 +202,16 @@
 .annotation-panel-entry-body p:last-child {
     margin-bottom: 0;
 }
+
+/* ============================================================
+   E. Scope Highlight — hover highlight for annotation scope
+   ============================================================ */
+.annotation-scope-highlight {
+    background-color: rgba(255, 220, 100, 0.25);
+    border-radius: 2px;
+    transition: background-color 0.15s ease;
+}
+
+.theme-dark .annotation-scope-highlight {
+    background-color: rgba(255, 220, 100, 0.15);
+}

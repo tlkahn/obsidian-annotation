@@ -12,7 +12,7 @@ pub struct RawComment {
 }
 
 /// Count UTF-16 code units for a string.
-fn utf16_len(s: &str) -> usize {
+pub(crate) fn utf16_len(s: &str) -> usize {
     s.chars().map(|c| c.len_utf16()).sum()
 }
 

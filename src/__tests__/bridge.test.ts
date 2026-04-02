@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { Annotation } from "../bridge";
+import type { Annotation, ScopeRange } from "../bridge";
 
 // Test that the JSON structure from WASM matches the TypeScript Annotation interface.
 // These test deserialization without requiring the actual WASM binary.
@@ -107,5 +107,20 @@ describe("Annotation JSON deserialization", () => {
         if (scopes[4].kind === "page") {
             expect(scopes[4].value).toBe(3);
         }
+    });
+});
+
+describe("ScopeRange JSON deserialization", () => {
+    it("parses a scope range result", () => {
+        const json = '{"start":10,"end":25}';
+        const range: ScopeRange = JSON.parse(json);
+        expect(range.start).toBe(10);
+        expect(range.end).toBe(25);
+    });
+
+    it("handles null result", () => {
+        const json = "null";
+        const range: ScopeRange | null = JSON.parse(json);
+        expect(range).toBeNull();
     });
 });
