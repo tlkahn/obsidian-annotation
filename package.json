@@ -1,0 +1,27 @@
+{
+  "name": "obsidian-annotation",
+  "version": "0.1.0",
+  "description": "Scholarly annotation rendering for Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "build:wasm": "wasm-pack build crates/wasm --target web --release",
+    "build:ts": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build": "npm run build:wasm && npm run build:ts",
+    "dev:wasm": "cargo watch -w crates -s 'npm run build:wasm'",
+    "dev:ts": "node esbuild.config.mjs",
+    "dev": "concurrently 'npm run dev:wasm' 'npm run dev:ts'",
+    "test": "cargo test -p annotation-core && vitest run",
+    "test:rust": "cargo test -p annotation-core",
+    "test:ts": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "builtin-modules": "3.3.0",
+    "concurrently": "^8.0.0",
+    "esbuild": "0.17.3",
+    "obsidian": "latest",
+    "tslib": "2.4.0",
+    "typescript": "4.7.4",
+    "vitest": "^4.1.2"
+  }
+}

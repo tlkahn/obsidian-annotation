@@ -1,0 +1,213 @@
+/* ============================================================
+   Annotation Plugin Styles
+   ============================================================ */
+
+/* --- Shared icon --- */
+.annotation-icon {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    margin-right: 4px;
+    color: rgb(var(--callout-color));
+}
+
+/* --- Certainty modifiers --- */
+.annotation-certainty-tentative {
+    opacity: 0.6;
+    font-style: italic;
+}
+.annotation-certainty-firm {
+    font-weight: 700;
+    color: var(--text-accent);
+}
+
+/* ============================================================
+   A. CalloutWidget — Block annotations (foldable callout)
+   ============================================================ */
+.annotation-callout {
+    margin: 4px 0;
+    border-radius: 4px;
+    border: 1px solid rgba(var(--callout-color), 0.3);
+    border-left: 4px solid rgb(var(--callout-color));
+    background-color: rgba(var(--callout-color), 0.08);
+    overflow: hidden;
+}
+
+.annotation-callout-title {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
+    font-size: 0.9em;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    gap: 4px;
+    color: rgb(var(--callout-color));
+}
+
+.annotation-callout-title:hover {
+    background-color: rgba(var(--callout-color), 0.06);
+}
+
+.annotation-callout-title-text {
+    flex: 1;
+}
+
+.annotation-callout-date {
+    font-size: 0.85em;
+    font-weight: 400;
+    color: var(--text-faint);
+    margin-left: auto;
+}
+
+.annotation-callout-fold {
+    font-size: 0.8em;
+    opacity: 0.5;
+    margin-left: 4px;
+}
+
+.annotation-callout-content {
+    padding: 4px 10px 8px;
+    font-size: 0.9em;
+    color: var(--text-normal);
+    border-top: 1px solid rgba(var(--callout-color), 0.12);
+    cursor: pointer;
+}
+
+.annotation-callout-content p {
+    margin: 0 0 4px;
+}
+
+.annotation-callout-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* ============================================================
+   B. PillWidget — Inline compact annotations (default)
+   ============================================================ */
+.annotation-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 7px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    vertical-align: baseline;
+    cursor: pointer;
+    background-color: rgba(var(--callout-color), 0.12);
+    border: 1px solid rgba(var(--callout-color), 0.25);
+    line-height: 1.4;
+    max-width: 400px;
+}
+
+.annotation-pill:hover {
+    background-color: rgba(var(--callout-color), 0.2);
+}
+
+.annotation-pill-certainty {
+    font-weight: 700;
+    font-size: 0.9em;
+}
+
+.annotation-pill-body {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.annotation-pill-body p {
+    display: inline;
+    margin: 0;
+}
+
+.annotation-pill-date {
+    color: var(--text-faint);
+    font-size: 0.8em;
+    margin-left: 2px;
+    white-space: nowrap;
+}
+
+/* ============================================================
+   C. MarkerWidget — Superscript markers (footnote mode)
+   ============================================================ */
+.annotation-marker {
+    display: inline;
+    font-size: 0.75em;
+    font-weight: 600;
+    color: rgb(var(--callout-color));
+    cursor: pointer;
+    padding: 0 2px;
+    border-radius: 3px;
+    vertical-align: super;
+    line-height: 0;
+}
+
+.annotation-marker:hover {
+    background-color: rgba(var(--callout-color), 0.15);
+}
+
+/* ============================================================
+   D. Annotation Side Panel
+   ============================================================ */
+.annotation-panel {
+    padding: 8px;
+}
+
+.annotation-panel-empty {
+    color: var(--text-faint);
+    font-style: italic;
+    text-align: center;
+    margin-top: 20px;
+}
+
+.annotation-panel-entry {
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    border-left: 3px solid rgb(var(--callout-color));
+    background-color: rgba(var(--callout-color), 0.06);
+    cursor: pointer;
+}
+
+.annotation-panel-entry:hover {
+    background-color: rgba(var(--callout-color), 0.12);
+}
+
+.annotation-panel-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    margin-bottom: 4px;
+}
+
+.annotation-panel-entry-type {
+    font-weight: 600;
+    color: rgb(var(--callout-color));
+}
+
+.annotation-panel-entry-date {
+    color: var(--text-faint);
+    font-size: 0.9em;
+}
+
+.annotation-panel-entry-line {
+    margin-left: auto;
+    color: var(--text-faint);
+    font-size: 0.85em;
+    font-family: var(--font-monospace);
+}
+
+.annotation-panel-entry-body {
+    font-size: 0.9em;
+    color: var(--text-normal);
+}
+
+.annotation-panel-entry-body p {
+    margin: 0 0 2px;
+}
+
+.annotation-panel-entry-body p:last-child {
+    margin-bottom: 0;
+}
