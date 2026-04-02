@@ -2,12 +2,12 @@ import { FileSystemAdapter } from "obsidian";
 
 export interface Annotation {
     form: "compact" | "block";
-    annotation_type: "note" | "question" | "todo" | "crossref" | "apparatus" | "bare";
+    annotation_type: "note" | "question" | "todo" | "crossref" | "apparatus" | "translation" | "bare";
     certainty: "tentative" | "firm" | "neutral";
     scope:
         | { kind: "words"; value: number }
-        | { kind: "paragraph" }
-        | { kind: "preceding_paragraph" }
+        | { kind: "paragraph"; value: number }
+        | { kind: "page"; value: number }
         | { kind: "anchor"; value: string }
         | { kind: "adjacency" };
     body: string | null;

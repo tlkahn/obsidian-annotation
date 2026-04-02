@@ -54,7 +54,7 @@ mod tests {
         assert_eq!(anns.len(), 1);
         assert_eq!(anns[0].annotation_type, AnnotationType::Note);
         assert_eq!(anns[0].certainty, Certainty::Firm);
-        assert_eq!(anns[0].scope, Scope::Paragraph);
+        assert_eq!(anns[0].scope, Scope::Paragraph(1));
         assert_eq!(anns[0].form, AnnotationForm::Block);
         assert_eq!(anns[0].body, Some("The body.".to_string()));
     }
@@ -129,6 +129,44 @@ mod tests {
         let doc = "<!-- app: | variant: ms. B has *prakāśa* -->";
         let anns = parse_annotations(doc);
         assert_eq!(anns[0].annotation_type, AnnotationType::Apparatus);
+    }
+
+    #[test]
+    fn translation_type_integration() {
+        let doc = "<!-- tr: _ | cf. Tibetan version @2026-03 -->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns.len(), 1);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Translation);
+        assert_eq!(anns[0].scope, Scope::Words(1));
+        assert_eq!(anns[0].body, Some("cf. Tibetan version".to_string()));
+        assert_eq!(anns[0].date, Some("2026-03".to_string()));
+    }
+
+    #[test]
+    fn page_scope_compact_integration() {
+        let doc = r"<!-- n: \f | page-level note -->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns.len(), 1);
+        assert_eq!(anns[0].scope, Scope::Page(1));
+    }
+
+    #[test]
+    fn page_scope_block_integration() {
+        let doc = "<!--\ncf\n\\ff\n---\nTwo pages.\n-->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns.len(), 1);
+        assert_eq!(anns[0].scope, Scope::Page(2));
+    }
+
+    #[test]
+    fn underscore_suffix_scope_integration() {
+        let doc = r"<!-- n: \p__ | two paragraphs -->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].scope, Scope::Paragraph(2));
+        // Equivalent to \pp
+        let doc2 = r"<!-- n: \pp | two paragraphs -->";
+        let anns2 = parse_annotations(doc2);
+        assert_eq!(anns[0].scope, anns2[0].scope);
     }
 
     #[test]

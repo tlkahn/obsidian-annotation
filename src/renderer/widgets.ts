@@ -9,6 +9,7 @@ const TYPE_INFO: Record<string, { label: string; icon: string; color: string }> 
     todo:       { label: "Todo",       icon: "lucide-circle-check",      color: "72, 198, 123" },
     crossref:   { label: "Cross-ref",  icon: "lucide-arrow-up-right",    color: "168, 130, 214" },
     apparatus:  { label: "Apparatus",  icon: "lucide-git-branch",        color: "198, 120, 95" },
+    translation:{ label: "Translation",icon: "lucide-languages",         color: "100, 180, 160" },
     bare:       { label: "Annotation", icon: "lucide-message-square",    color: "136, 136, 136" },
 };
 

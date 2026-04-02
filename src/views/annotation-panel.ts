@@ -10,6 +10,7 @@ const TYPE_INFO: Record<string, { label: string; color: string }> = {
     todo:       { label: "Todo",       color: "72, 198, 123" },
     crossref:   { label: "Cross-ref",  color: "168, 130, 214" },
     apparatus:  { label: "Apparatus",  color: "198, 120, 95" },
+    translation:{ label: "Translation",color: "100, 180, 160" },
     bare:       { label: "Annotation", color: "136, 136, 136" },
 };
 

@@ -11,7 +11,7 @@ static ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(_{1,}|\\pp?)\s").unwrap()
+    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?)\s").unwrap()
 });
 
 /// Parse a compact form annotation from the inner text of an HTML comment.
@@ -24,7 +24,7 @@ pub fn parse_compact(inner: &str) -> Annotation {
     let mut is_structured = false;
 
     // Step 1: Try to match type keyword at the start
-    let type_keywords = ["todo", "app", "cf", "n", "q"];
+    let type_keywords = ["todo", "app", "cf", "tr", "n", "q"];
     for &kw in &type_keywords {
         if remaining.starts_with(kw) {
             let after = &remaining[kw.len()..];
@@ -72,7 +72,8 @@ pub fn parse_compact(inner: &str) -> Annotation {
         scope = Scope::from_str(remaining);
         remaining = "";
         is_structured = true;
-    } else if remaining == r"\p" || remaining == r"\pp" {
+    } else if Scope::try_parse(remaining).is_some() {
+        // Scope at end: \p, \pp, \ppp, \f, \ff, \p__, \f___, etc.
         scope = Scope::from_str(remaining);
         remaining = "";
         is_structured = true;
@@ -172,7 +173,7 @@ mod tests {
         let ann = parse_compact(r"cf \pp");
         assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
         assert_eq!(ann.certainty, Certainty::Neutral);
-        assert_eq!(ann.scope, Scope::PrecedingParagraph);
+        assert_eq!(ann.scope, Scope::Paragraph(2));
         assert_eq!(ann.body, None);
     }
 
@@ -227,7 +228,7 @@ mod tests {
     #[test]
     fn paragraph_scope() {
         let ann = parse_compact(r"n: \p | paragraph note");
-        assert_eq!(ann.scope, Scope::Paragraph);
+        assert_eq!(ann.scope, Scope::Paragraph(1));
         assert_eq!(ann.body, Some("paragraph note".to_string()));
     }
 
@@ -243,5 +244,70 @@ mod tests {
         assert_eq!(ann.annotation_type, AnnotationType::Question);
         assert_eq!(ann.scope, Scope::Anchor("some phrase".to_string()));
         assert_eq!(ann.body, Some("is this right?".to_string()));
+    }
+
+    #[test]
+    fn translation_type() {
+        let ann = parse_compact("tr: | Sanskrit translation of verse 3");
+        assert_eq!(ann.annotation_type, AnnotationType::Translation);
+        assert_eq!(ann.certainty, Certainty::Neutral);
+        assert_eq!(ann.body, Some("Sanskrit translation of verse 3".to_string()));
+    }
+
+    #[test]
+    fn translation_tentative_with_date() {
+        let ann = parse_compact("tr? _ | tentative rendering @2026-03");
+        assert_eq!(ann.annotation_type, AnnotationType::Translation);
+        assert_eq!(ann.certainty, Certainty::Tentative);
+        assert_eq!(ann.scope, Scope::Words(1));
+        assert_eq!(ann.body, Some("tentative rendering".to_string()));
+        assert_eq!(ann.date, Some("2026-03".to_string()));
+    }
+
+    #[test]
+    fn page_scope() {
+        let ann = parse_compact(r"n: \f | page-level note");
+        assert_eq!(ann.scope, Scope::Page(1));
+        assert_eq!(ann.body, Some("page-level note".to_string()));
+    }
+
+    #[test]
+    fn page_scope_two() {
+        let ann = parse_compact(r"n: \ff | this and preceding page");
+        assert_eq!(ann.scope, Scope::Page(2));
+    }
+
+    #[test]
+    fn page_scope_underscore_suffix() {
+        let ann = parse_compact(r"cf \f__");
+        assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
+        assert_eq!(ann.scope, Scope::Page(2));
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn paragraph_underscore_suffix_compact() {
+        let ann = parse_compact(r"n: \p__ | two paragraphs");
+        assert_eq!(ann.scope, Scope::Paragraph(2));
+        assert_eq!(ann.body, Some("two paragraphs".to_string()));
+    }
+
+    #[test]
+    fn page_scope_three_letters() {
+        let ann = parse_compact(r"cf \fff");
+        assert_eq!(ann.scope, Scope::Page(3));
+    }
+
+    #[test]
+    fn page_scope_three_underscores() {
+        let ann = parse_compact(r"cf \f___");
+        assert_eq!(ann.scope, Scope::Page(3));
+    }
+
+    #[test]
+    fn page_scope_equivalence() {
+        let a = parse_compact(r"n: \f___ | note");
+        let b = parse_compact(r"n: \fff | note");
+        assert_eq!(a.scope, b.scope);
     }
 }

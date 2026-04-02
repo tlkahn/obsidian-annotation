@@ -40,7 +40,7 @@ pub fn parse_block(inner: &str) -> Annotation {
         }
 
         // Try scope line
-        if line == r"\p" || line == r"\pp" || (line.starts_with('_') && line.chars().all(|c| c == '_')) {
+        if Scope::try_parse(line).is_some() {
             scope = Scope::from_str(line);
             continue;
         }
@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(ann.form, AnnotationForm::Block);
         assert_eq!(ann.annotation_type, AnnotationType::Note);
         assert_eq!(ann.certainty, Certainty::Firm);
-        assert_eq!(ann.scope, Scope::Paragraph);
+        assert_eq!(ann.scope, Scope::Paragraph(1));
         assert_eq!(ann.date, Some("2026-03-28".to_string()));
         assert_eq!(
             ann.body,
@@ -161,7 +161,7 @@ mod tests {
         let inner = "todo\n\\p\n---";
         let ann = parse_block(inner);
         assert_eq!(ann.annotation_type, AnnotationType::Todo);
-        assert_eq!(ann.scope, Scope::Paragraph);
+        assert_eq!(ann.scope, Scope::Paragraph(1));
         assert_eq!(ann.body, None);
     }
 
@@ -185,6 +185,41 @@ mod tests {
         let inner = "n\n__\n---\nTwo words.";
         let ann = parse_block(inner);
         assert_eq!(ann.scope, Scope::Words(2));
+    }
+
+    #[test]
+    fn block_page_scope() {
+        let inner = "n\n\\f\n---\nPage-level note.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Page(1));
+    }
+
+    #[test]
+    fn block_page_scope_two() {
+        let inner = "cf\n\\ff\n---\nCross-ref spanning two pages.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Page(2));
+    }
+
+    #[test]
+    fn block_paragraph_underscore_suffix() {
+        let inner = "n\n\\p__\n---\nTwo paragraphs.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Paragraph(2));
+    }
+
+    #[test]
+    fn block_page_underscore_suffix() {
+        let inner = "cf\n\\f___\n---\nThree pages.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Page(3));
+    }
+
+    #[test]
+    fn block_paragraph_three_letters() {
+        let inner = "n\n\\ppp\n---\nThree paragraphs.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Paragraph(3));
     }
 
     // is_block_form detection

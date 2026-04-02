@@ -9,6 +9,7 @@ pub enum AnnotationType {
     Todo,
     CrossRef,
     Apparatus,
+    Translation,
     Bare,
 }
 
@@ -20,6 +21,7 @@ impl AnnotationType {
             "todo" => Some(Self::Todo),
             "cf" => Some(Self::CrossRef),
             "app" => Some(Self::Apparatus),
+            "tr" => Some(Self::Translation),
             _ => None,
         }
     }
@@ -48,24 +50,48 @@ impl Certainty {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Scope {
+    /// `_` = 1 word, `__` = 2 words, etc.
     Words(u8),
-    Paragraph,
-    PrecedingParagraph,
+    /// `\p` = 1 (current paragraph), `\pp` or `\p__` = 2 (current + preceding), etc.
+    Paragraph(u8),
+    /// `\f` = 1 (current page), `\ff` or `\f__` = 2, etc.
+    Page(u8),
+    /// `^"text"` — explicit anchor by search key
     Anchor(String),
+    /// Default when no scope is specified
     Adjacency,
 }
 
 impl Scope {
-    pub fn from_str(s: &str) -> Self {
-        if s.starts_with('_') && s.chars().all(|c| c == '_') {
-            Self::Words(s.len() as u8)
-        } else if s == r"\pp" {
-            Self::PrecedingParagraph
-        } else if s == r"\p" {
-            Self::Paragraph
+    /// Try to parse a scope string. Returns None for unrecognized patterns.
+    pub fn try_parse(s: &str) -> Option<Self> {
+        if !s.is_empty() && s.starts_with('_') && s.chars().all(|c| c == '_') {
+            Some(Self::Words(s.len() as u8))
+        } else if s.starts_with(r"\p") {
+            let rest = &s[2..];
+            if rest.is_empty() || rest.chars().all(|c| c == 'p') {
+                Some(Self::Paragraph((1 + rest.len()) as u8))
+            } else if rest.chars().all(|c| c == '_') {
+                Some(Self::Paragraph(rest.len() as u8))
+            } else {
+                None
+            }
+        } else if s.starts_with(r"\f") {
+            let rest = &s[2..];
+            if rest.is_empty() || rest.chars().all(|c| c == 'f') {
+                Some(Self::Page((1 + rest.len()) as u8))
+            } else if rest.chars().all(|c| c == '_') {
+                Some(Self::Page(rest.len() as u8))
+            } else {
+                None
+            }
         } else {
-            Self::Adjacency
+            None
         }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        Self::try_parse(s).unwrap_or(Self::Adjacency)
     }
 }
 
@@ -125,6 +151,11 @@ mod tests {
     }
 
     #[test]
+    fn annotation_type_translation() {
+        assert_eq!(AnnotationType::from_str("tr"), Some(AnnotationType::Translation));
+    }
+
+    #[test]
     fn annotation_type_unknown() {
         assert_eq!(AnnotationType::from_str("xyz"), None);
         assert_eq!(AnnotationType::from_str(""), None);
@@ -165,17 +196,64 @@ mod tests {
 
     #[test]
     fn scope_paragraph() {
-        assert_eq!(Scope::from_str(r"\p"), Scope::Paragraph);
+        assert_eq!(Scope::from_str(r"\p"), Scope::Paragraph(1));
     }
 
     #[test]
-    fn scope_preceding_paragraph() {
-        assert_eq!(Scope::from_str(r"\pp"), Scope::PrecedingParagraph);
+    fn scope_paragraph_two() {
+        assert_eq!(Scope::from_str(r"\pp"), Scope::Paragraph(2));
+    }
+
+    #[test]
+    fn scope_paragraph_three() {
+        assert_eq!(Scope::from_str(r"\ppp"), Scope::Paragraph(3));
+    }
+
+    #[test]
+    fn scope_paragraph_underscore_suffix() {
+        assert_eq!(Scope::from_str(r"\p__"), Scope::Paragraph(2));
+        assert_eq!(Scope::from_str(r"\p___"), Scope::Paragraph(3));
+    }
+
+    #[test]
+    fn scope_paragraph_underscore_one() {
+        // \p_ with 1 underscore = Paragraph(1), same as \p
+        assert_eq!(Scope::from_str(r"\p_"), Scope::Paragraph(1));
+    }
+
+    #[test]
+    fn scope_page() {
+        assert_eq!(Scope::from_str(r"\f"), Scope::Page(1));
+    }
+
+    #[test]
+    fn scope_page_two() {
+        assert_eq!(Scope::from_str(r"\ff"), Scope::Page(2));
+    }
+
+    #[test]
+    fn scope_page_three() {
+        assert_eq!(Scope::from_str(r"\fff"), Scope::Page(3));
+    }
+
+    #[test]
+    fn scope_page_underscore_suffix() {
+        assert_eq!(Scope::from_str(r"\f__"), Scope::Page(2));
+        assert_eq!(Scope::from_str(r"\f___"), Scope::Page(3));
+    }
+
+    #[test]
+    fn scope_equivalences() {
+        // \p__ = \pp, \f___ = \fff
+        assert_eq!(Scope::from_str(r"\p__"), Scope::from_str(r"\pp"));
+        assert_eq!(Scope::from_str(r"\f___"), Scope::from_str(r"\fff"));
     }
 
     #[test]
     fn scope_unrecognized_defaults_adjacency() {
         assert_eq!(Scope::from_str("unknown"), Scope::Adjacency);
+        assert_eq!(Scope::from_str(r"\pf"), Scope::Adjacency); // mixed letters
+        assert_eq!(Scope::from_str(r"\fp"), Scope::Adjacency); // mixed letters
     }
 
     // Serde round-trip
@@ -205,11 +283,9 @@ mod tests {
     fn scope_serde_tagged() {
         let scope = Scope::Anchor("8th century".to_string());
         let json = serde_json::to_string(&scope).unwrap();
-        // Verify round-trip works
         let parsed: Scope = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, scope);
 
-        // Verify variant name appears in JSON (serde rename_all lowercases it)
         let scope_adj = Scope::Adjacency;
         let json_adj = serde_json::to_string(&scope_adj).unwrap();
         let parsed_adj: Scope = serde_json::from_str(&json_adj).unwrap();
@@ -219,5 +295,16 @@ mod tests {
         let json_words = serde_json::to_string(&scope_words).unwrap();
         let parsed_words: Scope = serde_json::from_str(&json_words).unwrap();
         assert_eq!(parsed_words, Scope::Words(3));
+
+        // Paragraph and Page round-trip
+        let scope_para = Scope::Paragraph(2);
+        let json_para = serde_json::to_string(&scope_para).unwrap();
+        let parsed_para: Scope = serde_json::from_str(&json_para).unwrap();
+        assert_eq!(parsed_para, Scope::Paragraph(2));
+
+        let scope_page = Scope::Page(3);
+        let json_page = serde_json::to_string(&scope_page).unwrap();
+        let parsed_page: Scope = serde_json::from_str(&json_page).unwrap();
+        assert_eq!(parsed_page, Scope::Page(3));
     }
 }

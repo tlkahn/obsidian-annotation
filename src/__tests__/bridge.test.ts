@@ -86,16 +86,26 @@ describe("Annotation JSON deserialization", () => {
     it("handles all scope types", () => {
         const scopes: Annotation["scope"][] = [
             { kind: "words", value: 3 },
-            { kind: "paragraph" },
-            { kind: "preceding_paragraph" },
+            { kind: "paragraph", value: 1 },
+            { kind: "paragraph", value: 2 },
+            { kind: "page", value: 1 },
+            { kind: "page", value: 3 },
             { kind: "anchor", value: "8th century" },
             { kind: "adjacency" },
         ];
 
         expect(scopes[0].kind).toBe("words");
         expect(scopes[1].kind).toBe("paragraph");
-        expect(scopes[2].kind).toBe("preceding_paragraph");
-        expect(scopes[3].kind).toBe("anchor");
-        expect(scopes[4].kind).toBe("adjacency");
+        expect(scopes[3].kind).toBe("page");
+        expect(scopes[5].kind).toBe("anchor");
+        expect(scopes[6].kind).toBe("adjacency");
+        // Paragraph(2) = \pp or \p__
+        if (scopes[2].kind === "paragraph") {
+            expect(scopes[2].value).toBe(2);
+        }
+        // Page(3) = \fff or \f___
+        if (scopes[4].kind === "page") {
+            expect(scopes[4].value).toBe(3);
+        }
     });
 });
