@@ -22,6 +22,12 @@ function certLabel(certainty: string): string {
     return "";
 }
 
+/** Check if a click target is inside a rendered link (wikilink or external). */
+function isLinkClick(e: MouseEvent): boolean {
+    const target = e.target as HTMLElement;
+    return !!target.closest("a.internal-link, a.external-link, a[href]");
+}
+
 function renderIcon(container: HTMLElement, iconId: string) {
     const svg = container.createSvg("svg", {
         attr: {
@@ -110,8 +116,9 @@ export class CalloutWidget extends WidgetType {
             foldIcon.textContent = this.collapsed ? "▸" : "▾";
         });
 
-        // Body click → expand to raw source
+        // Body click → expand to raw source (unless clicking a link)
         body.addEventListener("mousedown", (e) => {
+            if (isLinkClick(e)) return; // let Obsidian handle link navigation
             e.preventDefault();
             e.stopPropagation();
             const charStart = this.charStart;
@@ -188,9 +195,10 @@ export class PillWidget extends WidgetType {
             dateEl.textContent = this.annotation.date;
         }
 
-        // Click → expand to raw source
+        // Click → expand to raw source (unless clicking a link)
         const charStart = this.charStart;
         wrapper.addEventListener("mousedown", (e) => {
+            if (isLinkClick(e)) return; // let Obsidian handle link navigation
             e.preventDefault();
             e.stopPropagation();
             setTimeout(() => {
