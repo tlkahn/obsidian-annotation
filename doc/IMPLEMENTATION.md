@@ -118,6 +118,9 @@ Generalized numeric scope with two equivalent notations:
 |----------|-------|-------|
 | `_` | Words | 1 |
 | `___` | Words | 3 |
+| `\s` | Sentence | 1 (default) |
+| `\ss` or `\s_` | Sentence | 2 |
+| `\sss` or `\s__` | Sentence | 3 |
 | `\p` | Paragraph | 1 |
 | `\pp` or `\p_` | Paragraph | 2 |
 | `\ppp` or `\p__` | Paragraph | 3 |
@@ -125,7 +128,7 @@ Generalized numeric scope with two equivalent notations:
 | `\ff` or `\f_` | Page | 2 |
 | `\fff` or `\f__` | Page | 3 |
 
-Letter-repetition (`\pp`) and underscore-suffix (`\p__`) are equivalent. Count = number of repeated letters (including the first) or number of underscores.
+Letter-repetition (`\ss`) and underscore-suffix (`\s__`) are equivalent. Count = number of repeated letters (including the first) or number of underscores. When no scope is specified, the default is `\s` (one sentence).
 
 ## TypeScript Layer
 

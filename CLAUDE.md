@@ -16,7 +16,7 @@ install.sh           Build + install to Obsidian vault
 
 - **Two annotation forms**: compact (single-line, inline) and block (multi-line, `---` separator)
 - **Seven types**: `n` (note), `q` (question), `todo`, `cf` (cross-ref), `app` (apparatus), `tr` (translation), bare (untyped)
-- **Scope system**: `_`/`__`/`___` (words), `\p`/`\pp`/`\ppp` (paragraphs), `\f`/`\ff`/`\fff` (pages), `^"text"` (anchor). Underscore suffix equivalent: `\p__` = `\pp`
+- **Scope system**: `_`/`__`/`___` (words), `\s`/`\ss`/`\sss` (sentences, default), `\p`/`\pp`/`\ppp` (paragraphs), `\f`/`\ff`/`\fff` (pages), `^"text"` (anchor). Underscore suffix equivalent: `\p__` = `\pp`
 - **Two display modes** for compact annotations: pill (inline colored chip) or footnote (superscript marker + side panel)
 - **Block annotations** always render as foldable callouts
 - **Scope hover highlight**: hovering a pill/marker highlights the scoped text (preceding N words, sentence, paragraph, page, or anchor match)
@@ -44,7 +44,7 @@ npx vitest run         # TS tests
 - Widget clicks use `setTimeout(() => view.dispatch(...), 0)` to defer cursor placement
 - Links inside widgets pass through to Obsidian navigation (checked via `isLinkClick()`)
 - Scope hover: CM6 `StateEffect`/`StateField` for transient `Decoration.mark`; scope resolved on demand via WASM (`scope_resolver.rs`)
-- Sentence splitting: `sentenza` crate (path dep at `../../../sentenza`) used for `Adjacency` scope
+- Sentence splitting: `sentenza` crate (path dep at `../../../sentenza`) used for `Sentence` scope
 
 ## DSL reference (compact form)
 
@@ -76,7 +76,7 @@ Markdown body
 - `crates/core/src/compact.rs` — compact form parser (regex-based, sequential greedy)
 - `crates/core/src/block.rs` — block form parser (head/body split on `---`)
 - `crates/core/src/scanner.rs` — HTML comment scanner with UTF-16 tracking
-- `crates/core/src/scope_resolver.rs` — resolves scope to concrete UTF-16 text range (Words, Adjacency, Paragraph, Page, Anchor)
+- `crates/core/src/scope_resolver.rs` — resolves scope to concrete UTF-16 text range (Words, Sentence, Paragraph, Page, Anchor)
 - `src/renderer/widgets.ts` — CalloutWidget, PillWidget, MarkerWidget DOM construction + hover handlers
 - `src/renderer/live-mode.ts` — CM6 decoration layer + editable-range logic
 - `src/renderer/scope-highlight.ts` — CM6 StateEffect/StateField for transient scope highlight mark
@@ -84,4 +84,4 @@ Markdown body
 
 ## Testing
 
-Rust tests cover all parser edge cases extensively (types, scope, certainty, anchors, dates, UTF-16 offsets, code fence skipping, bare annotations) plus scope resolver tests (Words, Adjacency, Paragraph, Page, Anchor). TS tests cover JSON deserialization from WASM output (Annotation + ScopeRange). Manual testing in an Obsidian vault is needed for widget rendering and scope hover highlighting.
+Rust tests cover all parser edge cases extensively (types, scope, certainty, anchors, dates, UTF-16 offsets, code fence skipping, bare annotations) plus scope resolver tests (Words, Sentence, Paragraph, Page, Anchor). TS tests cover JSON deserialization from WASM output (Annotation + ScopeRange). Manual testing in an Obsidian vault is needed for widget rendering and scope hover highlighting.

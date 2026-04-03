@@ -54,7 +54,7 @@ describe("Annotation JSON deserialization", () => {
             form: "compact",
             annotation_type: "bare",
             certainty: "neutral",
-            scope: { kind: "adjacency" },
+            scope: { kind: "sentence", value: 1 },
             body: "compare Vasugupta SpK 1.1",
             date: null,
             char_start: 4,
@@ -63,7 +63,7 @@ describe("Annotation JSON deserialization", () => {
         };
 
         expect(json.annotation_type).toBe("bare");
-        expect(json.scope.kind).toBe("adjacency");
+        expect(json.scope.kind).toBe("sentence");
         expect(json.date).toBeNull();
     });
 
@@ -72,7 +72,7 @@ describe("Annotation JSON deserialization", () => {
             form: "compact",
             annotation_type: "apparatus",
             certainty: "neutral",
-            scope: { kind: "adjacency" },
+            scope: { kind: "sentence", value: 1 },
             body: "variant reading in ms. B",
             date: null,
             char_start: 0,
@@ -90,15 +90,16 @@ describe("Annotation JSON deserialization", () => {
             { kind: "paragraph", value: 2 },
             { kind: "page", value: 1 },
             { kind: "page", value: 3 },
+            { kind: "sentence", value: 1 },
+            { kind: "sentence", value: 2 },
             { kind: "anchor", value: "8th century" },
-            { kind: "adjacency" },
         ];
 
         expect(scopes[0].kind).toBe("words");
         expect(scopes[1].kind).toBe("paragraph");
         expect(scopes[3].kind).toBe("page");
-        expect(scopes[5].kind).toBe("anchor");
-        expect(scopes[6].kind).toBe("adjacency");
+        expect(scopes[5].kind).toBe("sentence");
+        expect(scopes[7].kind).toBe("anchor");
         // Paragraph(2) = \pp or \p__
         if (scopes[2].kind === "paragraph") {
             expect(scopes[2].value).toBe(2);
@@ -106,6 +107,10 @@ describe("Annotation JSON deserialization", () => {
         // Page(3) = \fff or \f___
         if (scopes[4].kind === "page") {
             expect(scopes[4].value).toBe(3);
+        }
+        // Sentence(2) = \ss or \s__
+        if (scopes[6].kind === "sentence") {
+            expect(scopes[6].value).toBe(2);
         }
     });
 });

@@ -18,7 +18,7 @@ pub fn parse_block(inner: &str) -> Annotation {
     // Parse head lines
     let mut annotation_type = AnnotationType::Bare;
     let mut certainty = Certainty::Neutral;
-    let mut scope = Scope::Adjacency;
+    let mut scope = Scope::Sentence(1);
     let mut date = None;
 
     for line in head.lines() {
@@ -220,6 +220,27 @@ mod tests {
         let inner = "n\n\\ppp\n---\nThree paragraphs.";
         let ann = parse_block(inner);
         assert_eq!(ann.scope, Scope::Paragraph(3));
+    }
+
+    #[test]
+    fn block_sentence_scope() {
+        let inner = "n\n\\s\n---\nSentence-level note.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Sentence(1));
+    }
+
+    #[test]
+    fn block_sentence_scope_two() {
+        let inner = "cf\n\\ss\n---\nTwo sentences.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Sentence(2));
+    }
+
+    #[test]
+    fn block_sentence_underscore_suffix() {
+        let inner = "n\n\\s__\n---\nTwo sentences.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Sentence(2));
     }
 
     // is_block_form detection

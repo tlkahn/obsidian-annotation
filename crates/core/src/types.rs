@@ -56,10 +56,10 @@ pub enum Scope {
     Paragraph(u8),
     /// `\f` = 1 (current page), `\ff` or `\f__` = 2, etc.
     Page(u8),
+    /// `\s` = 1 (current sentence), `\ss` or `\s__` = 2, etc.
+    Sentence(u8),
     /// `^"text"` — explicit anchor by search key
     Anchor(String),
-    /// Default when no scope is specified
-    Adjacency,
 }
 
 impl Scope {
@@ -85,13 +85,22 @@ impl Scope {
             } else {
                 None
             }
+        } else if s.starts_with(r"\s") {
+            let rest = &s[2..];
+            if rest.is_empty() || rest.chars().all(|c| c == 's') {
+                Some(Self::Sentence((1 + rest.len()) as u8))
+            } else if rest.chars().all(|c| c == '_') {
+                Some(Self::Sentence(rest.len() as u8))
+            } else {
+                None
+            }
         } else {
             None
         }
     }
 
     pub fn from_str(s: &str) -> Self {
-        Self::try_parse(s).unwrap_or(Self::Adjacency)
+        Self::try_parse(s).unwrap_or(Self::Sentence(1))
     }
 }
 
@@ -243,17 +252,45 @@ mod tests {
     }
 
     #[test]
-    fn scope_equivalences() {
-        // \p__ = \pp, \f___ = \fff
-        assert_eq!(Scope::from_str(r"\p__"), Scope::from_str(r"\pp"));
-        assert_eq!(Scope::from_str(r"\f___"), Scope::from_str(r"\fff"));
+    fn scope_sentence() {
+        assert_eq!(Scope::from_str(r"\s"), Scope::Sentence(1));
     }
 
     #[test]
-    fn scope_unrecognized_defaults_adjacency() {
-        assert_eq!(Scope::from_str("unknown"), Scope::Adjacency);
-        assert_eq!(Scope::from_str(r"\pf"), Scope::Adjacency); // mixed letters
-        assert_eq!(Scope::from_str(r"\fp"), Scope::Adjacency); // mixed letters
+    fn scope_sentence_two() {
+        assert_eq!(Scope::from_str(r"\ss"), Scope::Sentence(2));
+    }
+
+    #[test]
+    fn scope_sentence_three() {
+        assert_eq!(Scope::from_str(r"\sss"), Scope::Sentence(3));
+    }
+
+    #[test]
+    fn scope_sentence_underscore_suffix() {
+        assert_eq!(Scope::from_str(r"\s__"), Scope::Sentence(2));
+        assert_eq!(Scope::from_str(r"\s___"), Scope::Sentence(3));
+    }
+
+    #[test]
+    fn scope_sentence_underscore_one() {
+        // \s_ with 1 underscore = Sentence(1), same as \s
+        assert_eq!(Scope::from_str(r"\s_"), Scope::Sentence(1));
+    }
+
+    #[test]
+    fn scope_equivalences() {
+        // \p__ = \pp, \f___ = \fff, \s__ = \ss
+        assert_eq!(Scope::from_str(r"\p__"), Scope::from_str(r"\pp"));
+        assert_eq!(Scope::from_str(r"\f___"), Scope::from_str(r"\fff"));
+        assert_eq!(Scope::from_str(r"\s__"), Scope::from_str(r"\ss"));
+    }
+
+    #[test]
+    fn scope_unrecognized_defaults_sentence() {
+        assert_eq!(Scope::from_str("unknown"), Scope::Sentence(1));
+        assert_eq!(Scope::from_str(r"\pf"), Scope::Sentence(1)); // mixed letters
+        assert_eq!(Scope::from_str(r"\fp"), Scope::Sentence(1)); // mixed letters
     }
 
     // Serde round-trip
@@ -286,10 +323,10 @@ mod tests {
         let parsed: Scope = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, scope);
 
-        let scope_adj = Scope::Adjacency;
+        let scope_adj = Scope::Sentence(1);
         let json_adj = serde_json::to_string(&scope_adj).unwrap();
         let parsed_adj: Scope = serde_json::from_str(&json_adj).unwrap();
-        assert_eq!(parsed_adj, Scope::Adjacency);
+        assert_eq!(parsed_adj, Scope::Sentence(1));
 
         let scope_words = Scope::Words(3);
         let json_words = serde_json::to_string(&scope_words).unwrap();
@@ -306,5 +343,11 @@ mod tests {
         let json_page = serde_json::to_string(&scope_page).unwrap();
         let parsed_page: Scope = serde_json::from_str(&json_page).unwrap();
         assert_eq!(parsed_page, Scope::Page(3));
+
+        // Sentence round-trip
+        let scope_sent = Scope::Sentence(2);
+        let json_sent = serde_json::to_string(&scope_sent).unwrap();
+        let parsed_sent: Scope = serde_json::from_str(&json_sent).unwrap();
+        assert_eq!(parsed_sent, Scope::Sentence(2));
     }
 }

@@ -14,7 +14,7 @@ pub fn resolve_scope_range(
 ) -> Option<(usize, usize)> {
     match scope {
         Scope::Words(n) => resolve_words(content, char_start, *n as usize),
-        Scope::Adjacency => resolve_adjacency(content, char_start, lang),
+        Scope::Sentence(n) => resolve_sentence(content, char_start, *n as usize, lang),
         Scope::Paragraph(n) => resolve_paragraph(content, char_start, *n as usize),
         Scope::Page(n) => resolve_page(content, char_start, *n as usize),
         Scope::Anchor(text) => resolve_anchor(content, char_start, text),
@@ -82,9 +82,12 @@ fn resolve_words(content: &str, char_start: usize, n: usize) -> Option<(usize, u
     Some((scope_start_utf16, scope_end_utf16))
 }
 
-/// Resolve `Adjacency` scope: find the preceding sentence using sentenza.
+/// Resolve `Sentence(n)` scope: find the last N sentences before `char_start` using sentenza.
 /// Extracts the current paragraph (up to `char_start`) and splits into sentences.
-fn resolve_adjacency(content: &str, char_start: usize, lang: &str) -> Option<(usize, usize)> {
+fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
+    if n == 0 {
+        return None;
+    }
     let byte_start = utf16_to_byte(content, char_start);
     let text_before = &content[..byte_start];
     let trimmed = text_before.trim_end();
@@ -102,16 +105,24 @@ fn resolve_adjacency(content: &str, char_start: usize, lang: &str) -> Option<(us
 
     // Split into sentences using sentenza
     let sentences = sentenza::split_sentences(paragraph, lang);
-    let last_sentence = sentences.last()?;
+    if sentences.is_empty() {
+        return None;
+    }
 
-    // Find the last occurrence of this sentence in the paragraph
-    let sentence_offset_in_para = paragraph.rfind(last_sentence.as_str())?;
-    let scope_start_byte = para_byte_start + sentence_offset_in_para;
-    let scope_end_byte = scope_start_byte + last_sentence.len();
+    // Take the last n sentences (or all if fewer available)
+    let take = n.min(sentences.len());
+    let first_sentence = &sentences[sentences.len() - take];
+    let last_sentence = &sentences[sentences.len() - 1];
 
-    // Extend scope_end to include any trailing text between last sentence end and annotation
-    // (sentenza trims sentences, so there may be trailing whitespace we want to skip)
-    // But scope_end should not exceed trimmed text
+    // Find the first selected sentence's position in the paragraph
+    let first_offset_in_para = paragraph.find(first_sentence.as_str())?;
+    // Find the last selected sentence's end position
+    let last_offset_in_para = paragraph.rfind(last_sentence.as_str())?;
+
+    let scope_start_byte = para_byte_start + first_offset_in_para;
+    let scope_end_byte = para_byte_start + last_offset_in_para + last_sentence.len();
+
+    // scope_end should not exceed trimmed text
     let scope_end_byte = scope_end_byte.min(trimmed.len());
 
     let scope_start_utf16 = utf16_len(&content[..scope_start_byte]);
@@ -281,40 +292,58 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    // ── Adjacency scope (preceding sentence) ──
+    // ── Sentence scope ──
 
     #[test]
-    fn adjacency_single_sentence() {
+    fn sentence_single_sentence() {
         let content = "The cat sat on the mat.<!-- n: | note -->";
         let char_start = 23;
-        let result = resolve_scope_range(content, char_start, &Scope::Adjacency, "en");
+        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
         assert_eq!(result, Some((0, 23))); // "The cat sat on the mat."
     }
 
     #[test]
-    fn adjacency_last_of_multiple_sentences() {
+    fn sentence_last_of_multiple_sentences() {
         let content = "The dog ran. The cat sat.<!-- n: | note -->";
         let char_start = 25;
-        let result = resolve_scope_range(content, char_start, &Scope::Adjacency, "en");
+        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
         // Should highlight "The cat sat." (last sentence)
         assert_eq!(result, Some((13, 25)));
     }
 
     #[test]
-    fn adjacency_mid_sentence() {
+    fn sentence_two_of_multiple() {
+        let content = "First one. The dog ran. The cat sat.<!-- n: \\ss | note -->";
+        let char_start = 36;
+        let result = resolve_scope_range(content, char_start, &Scope::Sentence(2), "en");
+        // Should highlight "The dog ran. The cat sat."
+        assert_eq!(result, Some((11, 36)));
+    }
+
+    #[test]
+    fn sentence_more_than_available() {
+        let content = "The dog ran. The cat sat.<!-- n: \\sss | note -->";
+        let char_start = 25;
+        let result = resolve_scope_range(content, char_start, &Scope::Sentence(3), "en");
+        // Only 2 sentences available — should highlight both
+        assert_eq!(result, Some((0, 25)));
+    }
+
+    #[test]
+    fn sentence_mid_sentence() {
         // Annotation is in the middle of a sentence
         let content = "The dog ran. The cat sat<!-- n: | note --> on the mat.";
         let char_start = 25;
-        let result = resolve_scope_range(content, char_start, &Scope::Adjacency, "en");
+        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
         // Should highlight "The cat sat" (partial sentence before annotation)
         assert_eq!(result, Some((13, 25)));
     }
 
     #[test]
-    fn adjacency_no_preceding_text() {
+    fn sentence_no_preceding_text() {
         let content = "<!-- n: | note -->";
         let char_start = 0;
-        let result = resolve_scope_range(content, char_start, &Scope::Adjacency, "en");
+        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
         assert_eq!(result, None);
     }
 

@@ -11,7 +11,7 @@ static ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?)\s").unwrap()
+    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
 });
 
 /// Parse a compact form annotation from the inner text of an HTML comment.
@@ -20,7 +20,7 @@ pub fn parse_compact(inner: &str) -> Annotation {
     let mut remaining = inner;
     let mut annotation_type = AnnotationType::Bare;
     let mut certainty = Certainty::Neutral;
-    let mut scope = Scope::Adjacency;
+    let mut scope = Scope::Sentence(1);
     let mut is_structured = false;
 
     // Step 1: Try to match type keyword at the start
@@ -121,7 +121,7 @@ pub fn parse_compact(inner: &str) -> Annotation {
             form: AnnotationForm::Compact,
             annotation_type: AnnotationType::Bare,
             certainty: Certainty::Neutral,
-            scope: Scope::Adjacency,
+            scope: Scope::Sentence(1),
             body: Some(inner.to_string()),
             date: None,
             char_start: 0,
@@ -213,7 +213,7 @@ mod tests {
         let ann = parse_compact("compare Vasugupta SpK 1.1");
         assert_eq!(ann.annotation_type, AnnotationType::Bare);
         assert_eq!(ann.certainty, Certainty::Neutral);
-        assert_eq!(ann.scope, Scope::Adjacency);
+        assert_eq!(ann.scope, Scope::Sentence(1));
         assert_eq!(ann.body, Some("compare Vasugupta SpK 1.1".to_string()));
     }
 
@@ -308,6 +308,48 @@ mod tests {
     fn page_scope_equivalence() {
         let a = parse_compact(r"n: \f___ | note");
         let b = parse_compact(r"n: \fff | note");
+        assert_eq!(a.scope, b.scope);
+    }
+
+    // Sentence scope
+
+    #[test]
+    fn sentence_scope() {
+        let ann = parse_compact(r"n: \s | sentence-level note");
+        assert_eq!(ann.scope, Scope::Sentence(1));
+        assert_eq!(ann.body, Some("sentence-level note".to_string()));
+    }
+
+    #[test]
+    fn sentence_scope_two() {
+        let ann = parse_compact(r"n: \ss | two sentences");
+        assert_eq!(ann.scope, Scope::Sentence(2));
+    }
+
+    #[test]
+    fn sentence_scope_three_letters() {
+        let ann = parse_compact(r"cf \sss");
+        assert_eq!(ann.scope, Scope::Sentence(3));
+    }
+
+    #[test]
+    fn sentence_scope_underscore_suffix() {
+        let ann = parse_compact(r"cf \s__");
+        assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
+        assert_eq!(ann.scope, Scope::Sentence(2));
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn sentence_scope_three_underscores() {
+        let ann = parse_compact(r"cf \s___");
+        assert_eq!(ann.scope, Scope::Sentence(3));
+    }
+
+    #[test]
+    fn sentence_scope_equivalence() {
+        let a = parse_compact(r"n: \s___ | note");
+        let b = parse_compact(r"n: \sss | note");
         assert_eq!(a.scope, b.scope);
     }
 }

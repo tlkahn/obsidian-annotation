@@ -8,8 +8,8 @@ export interface Annotation {
         | { kind: "words"; value: number }
         | { kind: "paragraph"; value: number }
         | { kind: "page"; value: number }
-        | { kind: "anchor"; value: string }
-        | { kind: "adjacency" };
+        | { kind: "sentence"; value: number }
+        | { kind: "anchor"; value: string };
     body: string | null;
     date: string | null;
     char_start: number;
