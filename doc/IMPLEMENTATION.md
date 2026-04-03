@@ -242,6 +242,26 @@ Hovering over a PillWidget or MarkerWidget highlights the text the annotation's 
 - Sentenza wraps `sentencex` (rule-based, 244+ languages) with language-specific preprocessing
 - Only used for `Adjacency` scope; other scope types are purely structural (word/paragraph/page boundaries)
 
+### ESC to Exit Annotation Edit Mode (`escape-annotation.ts`)
+
+When the cursor is inside an annotation's editable range, the raw `<!-- -->` source is shown instead of the rendered widget. Pressing ESC moves the cursor out of the annotation, causing it to re-render as a widget.
+
+**CM6 keymap** (`createEscapeAnnotationExtension`):
+- Registers `keymap.of([{ key: "Escape", run: handler }])` at default priority
+- Handler checks selection is collapsed; returns `false` otherwise (lets ESC collapse selection normally)
+- Calls `findAnnotationAtCursor()` which parses annotations and uses `isInEditableRange()` to test cursor membership
+- If cursor is not inside any annotation, returns `false` (no interference with other ESC handlers)
+- Dispatches cursor to `ann.char_end + 2`; if that exceeds doc length, falls back to `ann.char_start - 2`
+
+**Obsidian command** (`escape-annotation` / "Exit annotation edit mode"):
+- Registered via `plugin.addCommand()` with `editorCallback` for command palette discoverability and custom keybinding
+- No default hotkey — the CM6 keymap already handles ESC directly
+- Uses the same `findAnnotationAtCursor()` helper but through Obsidian's `Editor` API (`getCursor`, `posToOffset`, `offsetToPos`)
+
+**Buffer-zone pitfall**: `isInEditableRange()` expands each annotation's range by `buffer = 1` on both sides, so the editable zone spans `[char_start - 1, char_end + 1]` inclusive. The cursor must be placed at `char_end + 2` (not `char_end + 1`) to land outside this zone and trigger widget re-rendering. Placing it at `char_end + 1` leaves the cursor inside the expanded range — the annotation stays in raw-source mode even though the cursor appears to have moved past the `-->` close. This off-by-one is easy to miss because the buffer expansion is an implementation detail of `isInEditableRange()` in `live-mode.ts`, not visible at the call site.
+
+**Vim mode compatibility**: Obsidian's Vim mode registers its ESC handler before plugin extensions. On ESC in insert mode, Vim's handler fires first (insert → normal) and consumes the event. Our handler only fires on a subsequent ESC press when the cursor is in normal mode inside an annotation range.
+
 ## Design Decisions
 
 1. **WASM for parsing**: Keeps the parser fast and portable. Parsing is stateless and pure -- no DOM, no Obsidian API dependency. The same Rust core could be reused in other editors.

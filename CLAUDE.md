@@ -20,6 +20,7 @@ install.sh           Build + install to Obsidian vault
 - **Two display modes** for compact annotations: pill (inline colored chip) or footnote (superscript marker + side panel)
 - **Block annotations** always render as foldable callouts
 - **Scope hover highlight**: hovering a pill/marker highlights the scoped text (preceding N words, sentence, paragraph, page, or anchor match)
+- **ESC to exit edit mode**: pressing ESC when cursor is inside an annotation moves cursor out, re-rendering the widget
 - **`raw:`** prefix opts a comment out of annotation rendering
 - UTF-16 offsets throughout (CM6/JS compatibility)
 
@@ -44,6 +45,7 @@ npx vitest run         # TS tests
 - Widget clicks use `setTimeout(() => view.dispatch(...), 0)` to defer cursor placement
 - Links inside widgets pass through to Obsidian navigation (checked via `isLinkClick()`)
 - Scope hover: CM6 `StateEffect`/`StateField` for transient `Decoration.mark`; scope resolved on demand via WASM (`scope_resolver.rs`)
+- ESC exit: CM6 keymap extension moves cursor to `char_end + 2` (must clear the `buffer=1` zone in `isInEditableRange`; `+1` is still inside)
 - Sentence splitting: `sentenza` crate (path dep at `../../../sentenza`) used for `Sentence` scope
 
 ## DSL reference (compact form)
@@ -80,6 +82,7 @@ Markdown body
 - `src/renderer/widgets.ts` — CalloutWidget, PillWidget, MarkerWidget DOM construction + hover handlers
 - `src/renderer/live-mode.ts` — CM6 decoration layer + editable-range logic
 - `src/renderer/scope-highlight.ts` — CM6 StateEffect/StateField for transient scope highlight mark
+- `src/renderer/escape-annotation.ts` — CM6 keymap (ESC exits annotation edit mode) + Obsidian command
 - `styles.css` — all visual styling (uses `--callout-color` CSS variable for theming)
 
 ## Testing

@@ -2,6 +2,7 @@ import { FileSystemAdapter, Plugin } from "obsidian";
 import { WasmBridge } from "./bridge";
 import { DEFAULT_SETTINGS, PluginSettings } from "./config";
 import { createLiveModeExtension } from "./renderer/live-mode";
+import { createEscapeAnnotationExtension, findAnnotationAtCursor } from "./renderer/escape-annotation";
 import { scopeHighlightExtension } from "./renderer/scope-highlight";
 import { AnnotationSettingTab } from "./settings";
 import { AnnotationPanelView, ANNOTATION_PANEL_VIEW_TYPE } from "./views/annotation-panel";
@@ -30,6 +31,7 @@ export default class AnnotationPlugin extends Plugin {
 
         // Live editing-mode renderer
         this.registerEditorExtension(createLiveModeExtension(this));
+        this.registerEditorExtension(createEscapeAnnotationExtension(this));
         this.registerEditorExtension(scopeHighlightExtension());
 
         // Register annotation side panel view
@@ -54,6 +56,21 @@ export default class AnnotationPlugin extends Plugin {
                 }
             }),
         );
+
+        // ESC annotation command (for command palette / custom hotkeys)
+        this.addCommand({
+            id: "escape-annotation",
+            name: "Exit annotation edit mode",
+            editorCallback: (editor) => {
+                const cursor = editor.getCursor();
+                const offset = editor.posToOffset(cursor);
+                const content = editor.getValue();
+                const ann = findAnnotationAtCursor(this, content, offset);
+                if (!ann) return;
+                const target = Math.min(ann.char_end + 2, content.length);
+                editor.setCursor(editor.offsetToPos(target));
+            },
+        });
 
         // Settings tab
         this.addSettingTab(new AnnotationSettingTab(this.app, this));

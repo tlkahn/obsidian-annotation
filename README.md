@@ -128,6 +128,7 @@ Block annotations always render as foldable callouts regardless of the display m
 ## Interaction
 
 - **Cursor near annotation**: The widget disappears and the raw `<!-- -->` comment is shown, so you can edit it directly
+- **Press ESC**: When the cursor is inside an annotation's raw source, pressing ESC exits edit mode and re-renders the widget. Also available as the command "Exit annotation edit mode" in the command palette (rebindable in Obsidian's Hotkeys settings)
 - **Click widget body**: Places the cursor at the annotation, expanding it for editing
 - **Click fold toggle** (block callouts): Collapses/expands the body
 - **Hover over annotation**: Highlights the text the annotation applies to, based on its scope (see below)
