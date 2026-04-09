@@ -76,6 +76,16 @@ impl Scope {
             } else {
                 None
             }
+        } else if s.starts_with('p') && s.len() > 1 {
+            // Backslash-free: pp, ppp, p_, p__, etc.
+            let rest = &s[1..];
+            if rest.chars().all(|c| c == 'p') {
+                Some(Self::Paragraph((1 + rest.len()) as u8))
+            } else if rest.chars().all(|c| c == '_') {
+                Some(Self::Paragraph(rest.len() as u8))
+            } else {
+                None
+            }
         } else if s.starts_with(r"\f") {
             let rest = &s[2..];
             if rest.is_empty() || rest.chars().all(|c| c == 'f') {
@@ -85,9 +95,29 @@ impl Scope {
             } else {
                 None
             }
+        } else if s.starts_with('f') && s.len() > 1 {
+            // Backslash-free: ff, fff, f_, f__, etc.
+            let rest = &s[1..];
+            if rest.chars().all(|c| c == 'f') {
+                Some(Self::Page((1 + rest.len()) as u8))
+            } else if rest.chars().all(|c| c == '_') {
+                Some(Self::Page(rest.len() as u8))
+            } else {
+                None
+            }
         } else if s.starts_with(r"\s") {
             let rest = &s[2..];
             if rest.is_empty() || rest.chars().all(|c| c == 's') {
+                Some(Self::Sentence((1 + rest.len()) as u8))
+            } else if rest.chars().all(|c| c == '_') {
+                Some(Self::Sentence(rest.len() as u8))
+            } else {
+                None
+            }
+        } else if s.starts_with('s') && s.len() > 1 {
+            // Backslash-free: ss, sss, s_, s__, etc.
+            let rest = &s[1..];
+            if rest.chars().all(|c| c == 's') {
                 Some(Self::Sentence((1 + rest.len()) as u8))
             } else if rest.chars().all(|c| c == '_') {
                 Some(Self::Sentence(rest.len() as u8))
@@ -284,6 +314,66 @@ mod tests {
         assert_eq!(Scope::from_str(r"\p__"), Scope::from_str(r"\pp"));
         assert_eq!(Scope::from_str(r"\f___"), Scope::from_str(r"\fff"));
         assert_eq!(Scope::from_str(r"\s__"), Scope::from_str(r"\ss"));
+    }
+
+    // Backslash-free scope forms
+
+    #[test]
+    fn scope_paragraph_no_backslash_repeated() {
+        assert_eq!(Scope::from_str("pp"), Scope::Paragraph(2));
+        assert_eq!(Scope::from_str("ppp"), Scope::Paragraph(3));
+    }
+
+    #[test]
+    fn scope_paragraph_no_backslash_underscore() {
+        assert_eq!(Scope::from_str("p_"), Scope::Paragraph(1));
+        assert_eq!(Scope::from_str("p__"), Scope::Paragraph(2));
+        assert_eq!(Scope::from_str("p___"), Scope::Paragraph(3));
+    }
+
+    #[test]
+    fn scope_page_no_backslash_repeated() {
+        assert_eq!(Scope::from_str("ff"), Scope::Page(2));
+        assert_eq!(Scope::from_str("fff"), Scope::Page(3));
+    }
+
+    #[test]
+    fn scope_page_no_backslash_underscore() {
+        assert_eq!(Scope::from_str("f_"), Scope::Page(1));
+        assert_eq!(Scope::from_str("f__"), Scope::Page(2));
+        assert_eq!(Scope::from_str("f___"), Scope::Page(3));
+    }
+
+    #[test]
+    fn scope_sentence_no_backslash_repeated() {
+        assert_eq!(Scope::from_str("ss"), Scope::Sentence(2));
+        assert_eq!(Scope::from_str("sss"), Scope::Sentence(3));
+    }
+
+    #[test]
+    fn scope_sentence_no_backslash_underscore() {
+        assert_eq!(Scope::from_str("s_"), Scope::Sentence(1));
+        assert_eq!(Scope::from_str("s__"), Scope::Sentence(2));
+        assert_eq!(Scope::from_str("s___"), Scope::Sentence(3));
+    }
+
+    #[test]
+    fn scope_no_backslash_equivalences() {
+        // p__ = \pp = pp, etc.
+        assert_eq!(Scope::from_str("p__"), Scope::from_str(r"\pp"));
+        assert_eq!(Scope::from_str("f___"), Scope::from_str(r"\fff"));
+        assert_eq!(Scope::from_str("s__"), Scope::from_str(r"\ss"));
+        assert_eq!(Scope::from_str("pp"), Scope::from_str(r"\pp"));
+        assert_eq!(Scope::from_str("ss"), Scope::from_str(r"\ss"));
+        assert_eq!(Scope::from_str("ff"), Scope::from_str(r"\ff"));
+    }
+
+    #[test]
+    fn scope_single_letter_no_backslash_defaults() {
+        // Single bare letter without backslash is too ambiguous — defaults to Sentence(1)
+        assert_eq!(Scope::from_str("p"), Scope::Sentence(1));
+        assert_eq!(Scope::from_str("s"), Scope::Sentence(1));
+        assert_eq!(Scope::from_str("f"), Scope::Sentence(1));
     }
 
     #[test]

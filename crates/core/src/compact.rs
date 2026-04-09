@@ -11,7 +11,7 @@ static ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
+    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|p(?:p+|_{1,})|\\f(?:f+|_{1,})?|f(?:f+|_{1,})|\\s(?:s+|_{1,})?|s(?:s+|_{1,}))\s").unwrap()
 });
 
 /// Parse a compact form annotation from the inner text of an HTML comment.
@@ -351,5 +351,70 @@ mod tests {
         let a = parse_compact(r"n: \s___ | note");
         let b = parse_compact(r"n: \sss | note");
         assert_eq!(a.scope, b.scope);
+    }
+
+    // Backslash-free scope forms
+
+    #[test]
+    fn paragraph_no_backslash_user_example() {
+        // The exact user-reported example
+        let ann = parse_compact("n: p__ | nb @2026-04-09");
+        assert_eq!(ann.annotation_type, AnnotationType::Note);
+        assert_eq!(ann.scope, Scope::Paragraph(2));
+        assert_eq!(ann.body, Some("nb".to_string()));
+        assert_eq!(ann.date, Some("2026-04-09".to_string()));
+    }
+
+    #[test]
+    fn paragraph_no_backslash_repeated() {
+        let ann = parse_compact("n: pp | note");
+        assert_eq!(ann.scope, Scope::Paragraph(2));
+        assert_eq!(ann.body, Some("note".to_string()));
+    }
+
+    #[test]
+    fn paragraph_no_backslash_at_end() {
+        let ann = parse_compact("cf pp");
+        assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
+        assert_eq!(ann.scope, Scope::Paragraph(2));
+    }
+
+    #[test]
+    fn sentence_no_backslash_repeated() {
+        let ann = parse_compact("n: ss | two sentences");
+        assert_eq!(ann.scope, Scope::Sentence(2));
+    }
+
+    #[test]
+    fn sentence_no_backslash_underscore() {
+        let ann = parse_compact("cf s__");
+        assert_eq!(ann.scope, Scope::Sentence(2));
+    }
+
+    #[test]
+    fn page_no_backslash_repeated() {
+        let ann = parse_compact("n: ff | two pages");
+        assert_eq!(ann.scope, Scope::Page(2));
+    }
+
+    #[test]
+    fn page_no_backslash_underscore() {
+        let ann = parse_compact("cf f__");
+        assert_eq!(ann.scope, Scope::Page(2));
+    }
+
+    #[test]
+    fn no_backslash_equivalences() {
+        let a = parse_compact("n: p__ | note");
+        let b = parse_compact(r"n: \pp | note");
+        assert_eq!(a.scope, b.scope);
+
+        let c = parse_compact("n: ss | note");
+        let d = parse_compact(r"n: \ss | note");
+        assert_eq!(c.scope, d.scope);
+
+        let e = parse_compact("n: ff | note");
+        let f = parse_compact(r"n: \ff | note");
+        assert_eq!(e.scope, f.scope);
     }
 }
