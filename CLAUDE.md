@@ -47,6 +47,7 @@ npx vitest run         # TS tests
 - Scope hover: CM6 `StateEffect`/`StateField` for transient `Decoration.mark`; scope resolved on demand via WASM (`scope_resolver.rs`)
 - ESC exit: CM6 keymap extension moves cursor to `char_end + 2` (must clear the `buffer=1` zone in `isInEditableRange`; `+1` is still inside)
 - Sentence splitting: `sentenza` crate (path dep at `../../../sentenza`) used for `Sentence` scope
+- **Sentenza preprocessing pitfall**: `sentenza::split_sentences` preprocesses text before splitting (e.g. collapsing `\s{2,}` to single space). Returned sentence strings won't match the original text verbatim when the source has double spaces (common in LaTeX/PDF paste). The scope resolver uses `ws_flexible_find()` — a whitespace-tolerant search — instead of exact `str::find()` to locate sentences back in the original paragraph. Any new code that matches sentenza output against original text must account for this mismatch.
 
 ## DSL reference (compact form)
 

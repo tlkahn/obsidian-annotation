@@ -82,6 +82,52 @@ fn resolve_words(content: &str, char_start: usize, n: usize) -> Option<(usize, u
     Some((scope_start_utf16, scope_end_utf16))
 }
 
+/// Find `needle` in `haystack[start_from..]`, treating any run of whitespace in the
+/// needle as matching any non-empty run of whitespace in the haystack.  This is needed
+/// because sentenza's preprocessing may collapse double spaces, so the returned sentence
+/// text won't exactly match the original paragraph text.
+/// Returns `(match_start, match_end)` as byte indices into `haystack`.
+fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(usize, usize)> {
+    let parts: Vec<&str> = needle.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut offset = start_from;
+    loop {
+        let rel_pos = haystack[offset..].find(parts[0])?;
+        let match_start = offset + rel_pos;
+        let mut cursor = match_start + parts[0].len();
+
+        let mut ok = true;
+        for part in &parts[1..] {
+            let rest = &haystack[cursor..];
+            let ws = rest.len() - rest.trim_start().len();
+            if ws == 0 {
+                ok = false;
+                break;
+            }
+            cursor += ws;
+            if haystack[cursor..].starts_with(part) {
+                cursor += part.len();
+            } else {
+                ok = false;
+                break;
+            }
+        }
+
+        if ok {
+            return Some((match_start, cursor));
+        }
+
+        // Advance past current position by one character
+        match haystack[offset + rel_pos..].char_indices().nth(1) {
+            Some((next, _)) => offset += rel_pos + next,
+            None => return None,
+        }
+    }
+}
+
 /// Resolve `Sentence(n)` scope: find the last N sentences before `char_start` using sentenza.
 /// Extracts the current paragraph (up to `char_start`) and splits into sentences.
 fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
@@ -114,16 +160,14 @@ fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> O
     let first_sentence = &sentences[sentences.len() - take];
     let last_sentence = &sentences[sentences.len() - 1];
 
-    // Find the first selected sentence's position in the paragraph
-    let first_offset_in_para = paragraph.find(first_sentence.as_str())?;
-    // Find the last selected sentence's end position
-    let last_offset_in_para = paragraph.rfind(last_sentence.as_str())?;
+    // Use whitespace-flexible search: sentenza may normalize whitespace during
+    // preprocessing (e.g. collapsing double spaces), so the returned sentence text
+    // might not match the original paragraph verbatim.
+    let (first_start, _) = ws_flexible_find(paragraph, first_sentence, 0)?;
+    let (_, last_end) = ws_flexible_find(paragraph, last_sentence, first_start)?;
 
-    let scope_start_byte = para_byte_start + first_offset_in_para;
-    let scope_end_byte = para_byte_start + last_offset_in_para + last_sentence.len();
-
-    // scope_end should not exceed trimmed text
-    let scope_end_byte = scope_end_byte.min(trimmed.len());
+    let scope_start_byte = para_byte_start + first_start;
+    let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
 
     let scope_start_utf16 = utf16_len(&content[..scope_start_byte]);
     let scope_end_utf16 = utf16_len(&content[..scope_end_byte]);
@@ -433,5 +477,59 @@ mod tests {
             &Scope::Anchor("missing".to_string()), "en",
         );
         assert_eq!(result, None);
+    }
+
+    // ── Sentence scope with whitespace normalization ──
+
+    #[test]
+    fn sentence_with_double_spaces() {
+        // Double spaces (common in LaTeX paste) caused find() to fail because sentenza
+        // collapses \s{2,} to a single space during preprocessing.
+        let content = "Maximum depth  $d = 5$  and composition.<!-- n: | note -->";
+        let ann_start = content.find("<!--").unwrap();
+        let result = resolve_scope_range(content, ann_start, &Scope::Sentence(1), "en");
+        assert!(result.is_some(), "scope should resolve despite double spaces");
+        let (start, end) = result.unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(end, ann_start);
+    }
+
+    #[test]
+    fn sentence_double_spaces_multi_sentence() {
+        let content = "First sentence. Second  has  double  spaces.<!-- n: | note -->";
+        let ann_start = content.find("<!--").unwrap();
+        let result = resolve_scope_range(content, ann_start, &Scope::Sentence(1), "en");
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        // Should highlight only the second sentence (with its original double spaces)
+        assert_eq!(start, 16); // after "First sentence. "
+        assert_eq!(end, ann_start);
+    }
+
+    // ── ws_flexible_find unit tests ──
+
+    #[test]
+    fn ws_flex_exact_match() {
+        assert_eq!(ws_flexible_find("hello world", "hello world", 0), Some((0, 11)));
+    }
+
+    #[test]
+    fn ws_flex_double_space_in_haystack() {
+        assert_eq!(ws_flexible_find("hello  world", "hello world", 0), Some((0, 12)));
+    }
+
+    #[test]
+    fn ws_flex_multiple_double_spaces() {
+        assert_eq!(ws_flexible_find("a  b  c", "a b c", 0), Some((0, 7)));
+    }
+
+    #[test]
+    fn ws_flex_start_offset() {
+        assert_eq!(ws_flexible_find("xx hello  world", "hello world", 3), Some((3, 15)));
+    }
+
+    #[test]
+    fn ws_flex_no_match() {
+        assert_eq!(ws_flexible_find("hello world", "goodbye", 0), None);
     }
 }
