@@ -248,6 +248,11 @@ export class MarkerWidget extends WidgetType {
         wrapper.className = "annotation-marker";
         wrapper.style.setProperty("--callout-color", info.color);
 
+        // Surface the annotation ID as a tooltip (parity with PillWidget)
+        if (this.annotation.id) {
+            wrapper.setAttribute("title", `[${this.annotation.id}]`);
+        }
+
         // Type letter + certainty mark
         const label = info.label.charAt(0);
         const certMark = this.annotation.certainty === "tentative" ? "?"
