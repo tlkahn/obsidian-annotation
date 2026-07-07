@@ -103,7 +103,12 @@ pub(crate) fn parse_compact_inner(inner: &str, custom_marks: &[String]) -> (Anno
                 annotation_type = AnnotationType::Mark;
                 mark = Some(token);
                 remaining = after;
-                is_structured = true;
+                // A lone code is NOT structure: the migrate tool must not
+                // rewrite plain one-word legacy comments like <!-- nb -->.
+                // It still parses as a Mark for triple-dash rendering.
+                if !after.is_empty() {
+                    is_structured = true;
+                }
             }
         }
     }
@@ -196,7 +201,7 @@ pub(crate) fn parse_compact_inner(inner: &str, custom_marks: &[String]) -> (Anno
         Some(body_clean.to_string())
     };
 
-    if !is_structured {
+    if !is_structured && mark.is_none() {
         // Nothing structured found — treat entire inner text as bare body
         return (
             Annotation {
@@ -230,7 +235,7 @@ pub(crate) fn parse_compact_inner(inner: &str, custom_marks: &[String]) -> (Anno
             char_end: 0,
             original: String::new(),
         },
-        true,
+        is_structured,
     )
 }
 
@@ -694,6 +699,24 @@ mod tests {
     fn structured_mark_annotation() {
         assert!(is_structured_annotation("hi _"));
         assert!(!is_structured_annotation("it is raining"));
+    }
+
+    #[test]
+    fn lone_mark_code_is_not_structure() {
+        // The migrate tool must not rewrite plain one-word legacy comments
+        // like <!-- nb --> or <!-- sic -->
+        assert!(!is_structured_annotation("nb"));
+        assert!(!is_structured_annotation("sic"));
+        assert!(!is_structured_annotation("gloss"));
+    }
+
+    #[test]
+    fn lone_mark_code_still_parses_as_mark() {
+        // In a triple-dash comment a lone code still renders as a mark
+        let ann = parse_compact("sic");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("sic".to_string()));
+        assert_eq!(ann.body, None);
     }
 
     // llm / th types
