@@ -3,6 +3,7 @@ import { Extension } from "@codemirror/state";
 import type AnnotationPlugin from "../main";
 import type { Annotation, ScopeRange, WasmBridge } from "../bridge";
 import { CalloutWidget, PillWidget, MarkerWidget } from "./widgets";
+import { isInEditableRange } from "./editable-range";
 
 interface DecorationEntry {
     start: number;
@@ -122,20 +123,4 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
     });
 }
 
-export function isInEditableRange(
-    refStart: number,
-    refEnd: number,
-    cursorPos: number,
-    selStart: number,
-    selEnd: number
-): boolean {
-    const buffer = 1;
-    const expandedStart = Math.max(0, refStart - buffer);
-    const expandedEnd = refEnd + buffer;
-
-    if (selStart !== selEnd) {
-        return !(expandedEnd <= selStart || expandedStart >= selEnd);
-    }
-
-    return cursorPos >= expandedStart && cursorPos <= expandedEnd;
-}
+export { isInEditableRange } from "./editable-range";
