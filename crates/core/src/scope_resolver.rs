@@ -68,18 +68,23 @@ pub fn resolve_scope_range(
         Scope::Anchor(text) => resolve_anchor(content, char_start, text),
         Scope::Section => resolve_section(content, char_start),
         Scope::Document => resolve_document(content),
-        Scope::AsymWords(n, m) => {
-            resolve_asym_words(content, char_start, char_end, *n as usize, *m as usize)
-        }
-        Scope::AsymParagraph(n, m) => {
-            resolve_asym_paragraph(content, char_start, char_end, *n as usize, *m as usize)
-        }
-        Scope::AsymPage(n, m) => {
-            resolve_asym_page(content, char_start, char_end, *n as usize, *m as usize)
-        }
-        Scope::AsymSentence(n, m) => {
-            resolve_asym_sentence(content, char_start, char_end, *n as usize, *m as usize, lang)
-        }
+        Scope::AsymWords(n, m) => resolve_asym(
+            content, char_start, char_end, *n as usize, *m as usize,
+            words_before, words_after,
+        ),
+        Scope::AsymSentence(n, m) => resolve_asym(
+            content, char_start, char_end, *n as usize, *m as usize,
+            |c, b, k| sentences_before(c, b, k, lang),
+            |c, b, k| sentences_after(c, b, k, lang),
+        ),
+        Scope::AsymParagraph(n, m) => resolve_asym(
+            content, char_start, char_end, *n as usize, *m as usize,
+            paragraphs_before, paragraphs_after,
+        ),
+        Scope::AsymPage(n, m) => resolve_asym(
+            content, char_start, char_end, *n as usize, *m as usize,
+            pages_before, pages_after,
+        ),
     }
 }
 
@@ -138,11 +143,16 @@ fn words_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, us
     Some((scope_start_byte, scope_end_byte))
 }
 
+/// Byte offset after skipping leading whitespace from `byte_end`.
+fn skip_leading_ws(content: &str, byte_end: usize) -> usize {
+    let after = &content[byte_end..];
+    byte_end + (after.len() - after.trim_start().len())
+}
+
 /// Byte range of the M words following `byte_end`, clamped to the document
 /// end when fewer are available.
 fn words_after(content: &str, byte_end: usize, m: usize) -> Option<(usize, usize)> {
-    let text_after = &content[byte_end..];
-    let scope_start_byte = byte_end + (text_after.len() - text_after.trim_start().len());
+    let scope_start_byte = skip_leading_ws(content, byte_end);
     let text = &content[scope_start_byte..];
     if text.trim_end().is_empty() {
         return None;
@@ -194,21 +204,24 @@ fn resolve_words(content: &str, char_start: usize, n: usize) -> Option<(usize, u
     combine_ranges(content, words_before(content, byte_start, n), None)
 }
 
-/// Resolve `AsymWords(n, m)`: N words before the annotation, M words after it.
-fn resolve_asym_words(
+/// Shared asymmetric combinator: N units backward from the annotation start,
+/// M units forward from its end, via the given per-unit byte-range walkers.
+fn resolve_asym(
     content: &str,
     char_start: usize,
     char_end: usize,
     n: usize,
     m: usize,
+    before: impl Fn(&str, usize, usize) -> Option<(usize, usize)>,
+    after: impl Fn(&str, usize, usize) -> Option<(usize, usize)>,
 ) -> Option<(usize, usize)> {
     if n == 0 && m == 0 {
         return None;
     }
     let byte_start = utf16_to_byte(content, char_start);
     let byte_end = utf16_to_byte(content, char_end);
-    let back = if n > 0 { words_before(content, byte_start, n) } else { None };
-    let fwd = if m > 0 { words_after(content, byte_end, m) } else { None };
+    let back = if n > 0 { before(content, byte_start, n) } else { None };
+    let fwd = if m > 0 { after(content, byte_end, m) } else { None };
     combine_ranges(content, back, fwd)
 }
 
@@ -349,25 +362,6 @@ fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> O
     combine_ranges(content, sentences_before(content, byte_start, n, lang), None)
 }
 
-/// Resolve `AsymSentence(n, m)`: N sentences before, M after the annotation.
-fn resolve_asym_sentence(
-    content: &str,
-    char_start: usize,
-    char_end: usize,
-    n: usize,
-    m: usize,
-    lang: &str,
-) -> Option<(usize, usize)> {
-    if n == 0 && m == 0 {
-        return None;
-    }
-    let byte_start = utf16_to_byte(content, char_start);
-    let byte_end = utf16_to_byte(content, char_end);
-    let back = if n > 0 { sentences_before(content, byte_start, n, lang) } else { None };
-    let fwd = if m > 0 { sentences_after(content, byte_end, m, lang) } else { None };
-    combine_ranges(content, back, fwd)
-}
-
 /// Byte range of the current paragraph + n-1 preceding paragraphs before
 /// `byte_start`. Paragraphs are delimited by double newlines (`\n\n`).
 fn paragraphs_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, usize)> {
@@ -411,8 +405,7 @@ fn paragraphs_before(content: &str, byte_start: usize, n: usize) -> Option<(usiz
 /// Byte range of the M paragraphs following `byte_end` (starting with the
 /// remainder of the current paragraph), clamped to the document end.
 fn paragraphs_after(content: &str, byte_end: usize, m: usize) -> Option<(usize, usize)> {
-    let after = &content[byte_end..];
-    let start = byte_end + (after.len() - after.trim_start().len());
+    let start = skip_leading_ws(content, byte_end);
     let text = &content[start..];
     if text.trim_end().is_empty() {
         return None;
@@ -452,24 +445,6 @@ fn resolve_paragraph(content: &str, char_start: usize, n: usize) -> Option<(usiz
     combine_ranges(content, paragraphs_before(content, byte_start, n), None)
 }
 
-/// Resolve `AsymParagraph(n, m)`: N paragraphs before, M after the annotation.
-fn resolve_asym_paragraph(
-    content: &str,
-    char_start: usize,
-    char_end: usize,
-    n: usize,
-    m: usize,
-) -> Option<(usize, usize)> {
-    if n == 0 && m == 0 {
-        return None;
-    }
-    let byte_start = utf16_to_byte(content, char_start);
-    let byte_end = utf16_to_byte(content, char_end);
-    let back = if n > 0 { paragraphs_before(content, byte_start, n) } else { None };
-    let fwd = if m > 0 { paragraphs_after(content, byte_end, m) } else { None };
-    combine_ranges(content, back, fwd)
-}
-
 /// Byte range of the current page + n-1 preceding pages before `byte_start`.
 /// Pages are delimited by form feed (`\x0C`) characters.
 fn pages_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, usize)> {
@@ -502,8 +477,7 @@ fn pages_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, us
 /// Byte range of the M pages following `byte_end` (starting with the
 /// remainder of the current page), clamped to the document end.
 fn pages_after(content: &str, byte_end: usize, m: usize) -> Option<(usize, usize)> {
-    let after = &content[byte_end..];
-    let start = byte_end + (after.len() - after.trim_start().len());
+    let start = skip_leading_ws(content, byte_end);
     let text = &content[start..];
     if text.trim_end().is_empty() {
         return None;
@@ -531,24 +505,6 @@ fn resolve_page(content: &str, char_start: usize, n: usize) -> Option<(usize, us
     }
     let byte_start = utf16_to_byte(content, char_start);
     combine_ranges(content, pages_before(content, byte_start, n), None)
-}
-
-/// Resolve `AsymPage(n, m)`: N pages before, M after the annotation.
-fn resolve_asym_page(
-    content: &str,
-    char_start: usize,
-    char_end: usize,
-    n: usize,
-    m: usize,
-) -> Option<(usize, usize)> {
-    if n == 0 && m == 0 {
-        return None;
-    }
-    let byte_start = utf16_to_byte(content, char_start);
-    let byte_end = utf16_to_byte(content, char_end);
-    let back = if n > 0 { pages_before(content, byte_start, n) } else { None };
-    let fwd = if m > 0 { pages_after(content, byte_end, m) } else { None };
-    combine_ranges(content, back, fwd)
 }
 
 /// Resolve `Document` scope: the entire file.
