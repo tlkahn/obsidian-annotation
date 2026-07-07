@@ -7,6 +7,13 @@ export const setScopeHighlight = StateEffect.define<{ from: number; to: number }
 
 const scopeHighlightMark = Decoration.mark({ class: "annotation-scope-highlight" });
 
+// Very large scopes (whole document, big sections) get a fainter tint so a
+// hover doesn't flash the entire file in full highlight color.
+const LARGE_SCOPE_THRESHOLD = 2000;
+const scopeHighlightMarkLarge = Decoration.mark({
+    class: "annotation-scope-highlight annotation-scope-highlight-large",
+});
+
 /** StateField that holds the current scope highlight decoration. */
 const scopeHighlightField = StateField.define<DecorationSet>({
     create() {
@@ -18,7 +25,11 @@ const scopeHighlightField = StateField.define<DecorationSet>({
                 if (e.value === null) return Decoration.none;
                 const { from, to } = e.value;
                 if (from >= 0 && to > from && to <= tr.state.doc.length) {
-                    return Decoration.set([scopeHighlightMark.range(from, to)]);
+                    const mark =
+                        to - from > LARGE_SCOPE_THRESHOLD
+                            ? scopeHighlightMarkLarge
+                            : scopeHighlightMark;
+                    return Decoration.set([mark.range(from, to)]);
                 }
                 return Decoration.none;
             }

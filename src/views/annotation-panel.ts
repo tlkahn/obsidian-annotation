@@ -116,6 +116,12 @@ export class AnnotationPanelView extends ItemView {
                 typeLabel.addClass("annotation-certainty-firm");
             }
 
+            // ID badge
+            if (ann.id) {
+                const idEl = header.createSpan({ cls: "annotation-panel-entry-id" });
+                idEl.textContent = `[${ann.id}]`;
+            }
+
             if (ann.date) {
                 const dateEl = header.createSpan({ cls: "annotation-panel-entry-date" });
                 dateEl.textContent = ann.date;

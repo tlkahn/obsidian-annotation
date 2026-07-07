@@ -3,6 +3,7 @@ import { Extension } from "@codemirror/state";
 import type AnnotationPlugin from "../main";
 import type { Annotation, ScopeRange, WasmBridge } from "../bridge";
 import { CalloutWidget, PillWidget, MarkerWidget } from "./widgets";
+import { isInEditableRange } from "./editable-range";
 
 interface DecorationEntry {
     start: number;
@@ -67,9 +68,14 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                     if (range && range.start < range.end && range.end <= state.doc.length) {
                         entries.push({ start, end, decoration: Decoration.replace({}) });
                         const attributes: Record<string, string> = {};
-                        if (ann.body) {
-                            // A mark's note surfaces as a native tooltip
-                            attributes["title"] = ann.body;
+                        // A mark's note — and its ID, since marks render no
+                        // widget, making this the ID's only editor surface —
+                        // surfaces as a native tooltip
+                        const tooltip = [ann.id ? `[${ann.id}]` : null, ann.body]
+                            .filter(Boolean)
+                            .join(" ");
+                        if (tooltip) {
+                            attributes["title"] = tooltip;
                         }
                         entries.push({
                             start: range.start,
@@ -122,20 +128,3 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
     });
 }
 
-export function isInEditableRange(
-    refStart: number,
-    refEnd: number,
-    cursorPos: number,
-    selStart: number,
-    selEnd: number
-): boolean {
-    const buffer = 1;
-    const expandedStart = Math.max(0, refStart - buffer);
-    const expandedEnd = refEnd + buffer;
-
-    if (selStart !== selEnd) {
-        return !(expandedEnd <= selStart || expandedStart >= selEnd);
-    }
-
-    return cursorPos >= expandedStart && cursorPos <= expandedEnd;
-}

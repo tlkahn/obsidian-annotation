@@ -2,7 +2,7 @@ import { keymap, EditorView } from "@codemirror/view";
 import { Extension } from "@codemirror/state";
 import type AnnotationPlugin from "../main";
 import type { Annotation } from "../bridge";
-import { isInEditableRange } from "./live-mode";
+import { isInEditableRange } from "./editable-range";
 
 export function findAnnotationAtCursor(
     plugin: AnnotationPlugin,
