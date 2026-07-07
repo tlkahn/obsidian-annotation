@@ -558,9 +558,18 @@ fn resolve_document(content: &str) -> Option<(usize, usize)> {
     Some((0, utf16_len(content)))
 }
 
-/// The ATX heading level of a markdown line (1-6), or None.
+/// The ATX heading level of a markdown line (1-6), or None. Per CommonMark,
+/// at most 3 leading spaces are allowed; 4+ spaces or a tab make the line
+/// indented code, not a heading.
 fn heading_level(line: &str) -> Option<u8> {
-    let trimmed = line.trim_start();
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let trimmed = &line[indent..];
+    if trimmed.starts_with('\t') {
+        return None;
+    }
     let hashes = trimmed.chars().take_while(|&c| c == '#').count();
     if (1..=6).contains(&hashes) {
         let rest = &trimmed[hashes..];
@@ -918,6 +927,25 @@ mod tests {
         // Section ends just before "## Next" (trimmed), running through the fence
         let expected_end = content.rfind("\n\n## Next").unwrap();
         assert_eq!(result, Some((0, expected_end)));
+    }
+
+    #[test]
+    fn section_ignores_indented_code_hash_line() {
+        // 4-space-indented lines are code, not ATX headings (CommonMark)
+        let content = "## Real\n\ntext<!--- n: \\h | x --->\n\n    # indented code comment\n\nmore text\n\n## Next";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        let expected_end = content.rfind("\n\n## Next").unwrap();
+        assert_eq!(result, Some((0, expected_end)));
+    }
+
+    #[test]
+    fn heading_up_to_three_spaces_indent_ok() {
+        assert_eq!(heading_level("   ## ok"), Some(2));
+        assert_eq!(heading_level("    ## code"), None);
+        assert_eq!(heading_level("\t# tab code"), None);
+        assert_eq!(heading_level("# plain"), Some(1));
     }
 
     #[test]
