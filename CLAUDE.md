@@ -22,7 +22,8 @@ install.sh           Build + install to Obsidian vault
 - **Scope resolution**: `resolve_scope_range(content, char_start, char_end, scope, lang, mode)` - graceful clamp to document boundaries; modes `backward` (default) and `bidirectional` (symmetric scopes extend both ways by the same count)
 - **Two display modes** for compact annotations: pill (inline colored chip) or footnote (superscript marker + side panel)
 - **Block annotations** always render as foldable callouts
-- **Scope hover highlight**: hovering a pill/marker highlights the scoped text (N words/sentences/paragraphs/pages backward, heading section, whole document, anchor match, or asymmetric before/after ranges)
+- **Scope hover highlight**: hovering a pill/marker highlights the scoped text (N words/sentences/paragraphs/pages backward, heading section, whole document, anchor match, or asymmetric before/after ranges); ranges over 2000 chars use a fainter tint (`.annotation-scope-highlight-large`)
+- **ID surfacing**: pills show `[id]` as a tooltip; callout headers and side-panel entries show a faint monospace `[id]` badge
 - **ESC to exit edit mode**: pressing ESC when cursor is inside an annotation moves cursor out, re-rendering the widget
 - **Standard `<!-- -->` comments are the opt-out**: only `<!--- --->` renders as an annotation
 - UTF-16 offsets throughout (CM6/JS compatibility)
@@ -49,7 +50,7 @@ cargo run -p annotation-core --bin migrate -- <vault> [--dry-run] [--ext md]   #
 - Widget clicks use `setTimeout(() => view.dispatch(...), 0)` to defer cursor placement
 - Links inside widgets pass through to Obsidian navigation (checked via `isLinkClick()`)
 - Scope hover: CM6 `StateEffect`/`StateField` for transient `Decoration.mark`; scope resolved on demand via WASM (`scope_resolver.rs`)
-- ESC exit: CM6 keymap extension moves cursor to `char_end + 2` (must clear the `buffer=1` zone in `isInEditableRange`; `+1` is still inside)
+- ESC exit: CM6 keymap extension moves cursor to `char_end + 2` (must clear the `buffer=1` zone in `isInEditableRange`; `+1` is still inside). The logic works on absolute scanner offsets, so it is delimiter-length- and `[id]`-independent; `isInEditableRange` lives in `src/renderer/editable-range.ts` (standalone, unit-tested)
 - Sentence splitting: `sentenza` crate (path dep at `../../../sentenza`) used for `Sentence` scope
 - **Sentenza preprocessing pitfall**: `sentenza::split_sentences` preprocesses text before splitting (e.g. collapsing `\s{2,}` to single space). Returned sentence strings won't match the original text verbatim when the source has double spaces (common in LaTeX/PDF paste). The scope resolver uses `ws_flexible_find()` — a whitespace-tolerant search — instead of exact `str::find()` to locate sentences back in the original paragraph. Any new code that matches sentenza output against original text must account for this mismatch.
 
