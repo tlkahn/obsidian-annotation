@@ -447,6 +447,12 @@ fn resolve_paragraph(content: &str, char_start: usize, n: usize) -> Option<(usiz
 
 /// Byte range of the current page + n-1 preceding pages before `byte_start`.
 /// Pages are delimited by form feed (`\x0C`) characters.
+///
+/// Intentional fall-through: `\x0C` is Unicode whitespace, so an annotation
+/// sitting alone at the very top of a page has its empty current page
+/// trimmed away and resolves to the preceding page — the same behavior the
+/// spec's `2\p1` example relies on for paragraphs (an annotation in an
+/// otherwise-empty unit falls through to the adjacent unit).
 fn pages_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, usize)> {
     let text_before = &content[..byte_start];
     let trimmed = text_before.trim_end();
@@ -779,6 +785,37 @@ mod tests {
         let char_start = 14;
         let result = resolve_scope_range(content, char_start, char_start, &Scope::Page(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, 14)));
+    }
+
+    // ── Page/paragraph boundary fall-through (intentional, locked) ──
+
+    #[test]
+    fn page_annotation_at_top_of_page_falls_through_to_previous() {
+        // \x0C is whitespace: an annotation alone at the top of page 2 has an
+        // empty current page, so \f falls through to page 1 — mirroring the
+        // paragraph behavior the spec's 2\p1 example relies on.
+        let content = "One.\x0C<!--- n: \\f | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Page(1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, 4))); // "One."
+    }
+
+    #[test]
+    fn page_forward_just_before_form_feed_falls_through_to_next() {
+        let content = "One.<!--- n: 0\\f1 | x --->\x0CTwo.\x0CThree.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\f1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(0, 1), "en", ResolutionMode::Backward);
+        let start = content.find("Two.").unwrap();
+        assert_eq!(result, Some((start, start + 4))); // next page, not beyond
+    }
+
+    #[test]
+    fn paragraph_annotation_own_paragraph_falls_through_to_previous() {
+        let content = "Para A.\n\n<!--- n: \\p | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Paragraph(1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, 7))); // "Para A."
     }
 
     // ── Anchor scope ──

@@ -21,7 +21,7 @@ install.sh           Build + install to Obsidian vault
 - **Scope resolution**: `resolve_scope_range(content, char_start, char_end, scope, lang, mode)` - graceful clamp to document boundaries; modes `backward` (default) and `bidirectional` (symmetric scopes extend both ways by the same count)
 - **Two display modes** for compact annotations: pill (inline colored chip) or footnote (superscript marker + side panel)
 - **Block annotations** always render as foldable callouts
-- **Scope hover highlight**: hovering a pill/marker highlights the scoped text (preceding N words, sentence, paragraph, page, or anchor match)
+- **Scope hover highlight**: hovering a pill/marker highlights the scoped text (N words/sentences/paragraphs/pages backward, heading section, whole document, anchor match, or asymmetric before/after ranges)
 - **ESC to exit edit mode**: pressing ESC when cursor is inside an annotation moves cursor out, re-rendering the widget
 - **Standard `<!-- -->` comments are the opt-out**: only `<!--- --->` renders as an annotation
 - UTF-16 offsets throughout (CM6/JS compatibility)
@@ -91,4 +91,4 @@ Markdown body
 
 ## Testing
 
-Rust tests cover all parser edge cases extensively (types, scope, certainty, anchors, dates, UTF-16 offsets, code fence skipping, bare annotations) plus scope resolver tests (Words, Sentence, Paragraph, Page, Anchor). TS tests cover JSON deserialization from WASM output (Annotation + ScopeRange). Manual testing in an Obsidian vault is needed for widget rendering and scope hover highlighting.
+Rust tests cover all parser edge cases extensively (types, scope, certainty, anchors, dates, UTF-16 offsets, code fence skipping, bare annotations) plus scope resolver tests (Words, Sentence, Paragraph, Page, Anchor, Section, Document, asymmetric variants, resolution modes, boundary clamping). TS tests cover JSON deserialization from WASM output (Annotation + ScopeRange). Manual testing in an Obsidian vault is needed for widget rendering and scope hover highlighting.
