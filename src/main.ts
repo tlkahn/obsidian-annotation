@@ -82,11 +82,24 @@ export default class AnnotationPlugin extends Plugin {
     }
 
     onunload() {
-        this.customMarkStyleEl?.remove();
+        for (const el of this.customMarkStyleEls) {
+            el.remove();
+        }
+        this.customMarkStyleEls = [];
         console.log("[Annotation] Plugin unloaded.");
     }
 
-    private customMarkStyleEl: HTMLStyleElement | null = null;
+    private customMarkCss = "";
+    private customMarkStyleEls: HTMLStyleElement[] = [];
+
+    /** Inject the custom mark CSS into a document (main or pop-out window). */
+    private injectCustomMarkCss(doc: Document) {
+        if (!this.customMarkCss) return;
+        const el = doc.createElement("style");
+        el.textContent = this.customMarkCss;
+        doc.head.appendChild(el);
+        this.customMarkStyleEls.push(el);
+    }
 
     /** Load custom mark definitions from `.lit/marks.toml` (vault root),
      *  register their codes with the parser, and inject their CSS. */
@@ -134,9 +147,14 @@ export default class AnnotationPlugin extends Plugin {
             );
         }
         if (rules.length > 0) {
-            this.customMarkStyleEl = document.createElement("style");
-            this.customMarkStyleEl.textContent = rules.join("\n");
-            document.head.appendChild(this.customMarkStyleEl);
+            this.customMarkCss = rules.join("\n");
+            this.injectCustomMarkCss(document);
+            // Pop-out windows need the CSS too
+            this.registerEvent(
+                this.app.workspace.on("window-open", (_win, window) => {
+                    this.injectCustomMarkCss(window.document);
+                }),
+            );
         }
         console.log(`[Annotation] Loaded ${this.bridge.customMarkCodes.length} custom mark(s)`);
     }
