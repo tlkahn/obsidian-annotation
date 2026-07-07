@@ -1041,6 +1041,51 @@ mod tests {
     }
 
     #[test]
+    fn bidirectional_sentence() {
+        let content = "First one. Second two. <!--- x ---> Third three. Fourth four.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- x --->".len();
+        let bidi = resolve_scope_range(content, ann, ann_end, &Scope::Sentence(1), "en", ResolutionMode::Bidirectional);
+        let asym = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(1, 1), "en", ResolutionMode::Backward);
+        assert_eq!(bidi, asym);
+        let back_start = content.find("Second two.").unwrap();
+        let fwd_end = content.find("Third three.").unwrap() + "Third three.".len();
+        assert_eq!(bidi, Some((back_start, fwd_end)));
+    }
+
+    #[test]
+    fn bidirectional_page() {
+        let content = "One.\x0CTwo.<!--- x ---> more.\x0CThree.\x0CFour.";
+        let ann = 9;
+        let ann_end = ann + "<!--- x --->".len();
+        let bidi = resolve_scope_range(content, ann, ann_end, &Scope::Page(1), "en", ResolutionMode::Bidirectional);
+        let asym = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(1, 1), "en", ResolutionMode::Backward);
+        assert_eq!(bidi, asym);
+        assert!(bidi.is_some());
+    }
+
+    #[test]
+    fn asym_page_forward_clamps_to_eof() {
+        let content = "One.\x0CTwo.<!--- n: 0\\f9 | x ---> rest of page.";
+        let ann = 9;
+        let ann_end = ann + "<!--- n: 0\\f9 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(0, 9), "en", ResolutionMode::Backward);
+        let start = content.find("rest of page.").unwrap();
+        assert_eq!(result, Some((start, content.len())));
+    }
+
+    #[test]
+    fn asym_words_backward_clamps_to_doc_start() {
+        // 2 words available, 9 requested — clamp to document start
+        let content = "alpha beta <!--- n: 9_1 | x ---> gamma";
+        let ann = 11;
+        let ann_end = ann + "<!--- n: 9_1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymWords(9, 1), "en", ResolutionMode::Backward);
+        let fwd_end = content.find("gamma").unwrap() + "gamma".len();
+        assert_eq!(result, Some((0, fwd_end)));
+    }
+
+    #[test]
     fn bidirectional_does_not_affect_anchor() {
         let content = "The term anuttara appears.<!--- x --->";
         let backward = resolve_scope_range(content, 26, 38, &Scope::Anchor("anuttara".to_string()), "en", ResolutionMode::Backward);
