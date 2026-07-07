@@ -21,7 +21,9 @@ pub fn resolve_scope_range(
         Ok(s) => s,
         Err(_) => return "null".to_string(),
     };
-    let mode = ResolutionMode::from_str(mode);
+    let Some(mode) = ResolutionMode::from_str(mode) else {
+        return "null".to_string();
+    };
     match scope_resolver::resolve_scope_range(content, char_start, char_end, &scope, lang, mode) {
         Some((start, end)) => format!("{{\"start\":{},\"end\":{}}}", start, end),
         None => "null".to_string(),

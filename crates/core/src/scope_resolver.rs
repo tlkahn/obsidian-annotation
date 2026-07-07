@@ -13,12 +13,13 @@ pub enum ResolutionMode {
 }
 
 impl ResolutionMode {
-    /// Parse a mode string from the FFI boundary. Unknown values fall back
-    /// to the backward default.
-    pub fn from_str(s: &str) -> Self {
+    /// Parse a mode string from the FFI boundary. Unknown values are an
+    /// error (None) rather than a silent backward fallback.
+    pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "bidirectional" => Self::Bidirectional,
-            _ => Self::Backward,
+            "backward" => Some(Self::Backward),
+            "bidirectional" => Some(Self::Bidirectional),
+            _ => None,
         }
     }
 }
@@ -1004,6 +1005,17 @@ mod tests {
         let ann = content.find("<!---").unwrap();
         let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((22, 31))); // the second "Stop now.", not the first
+    }
+
+    // ── ResolutionMode parsing ──
+
+    #[test]
+    fn resolution_mode_from_str_strict() {
+        assert_eq!(ResolutionMode::from_str("backward"), Some(ResolutionMode::Backward));
+        assert_eq!(ResolutionMode::from_str("bidirectional"), Some(ResolutionMode::Bidirectional));
+        assert_eq!(ResolutionMode::from_str("Bidirectional"), None);
+        assert_eq!(ResolutionMode::from_str("bidi"), None);
+        assert_eq!(ResolutionMode::from_str(""), None);
     }
 
     // ── Bidirectional mode ──
