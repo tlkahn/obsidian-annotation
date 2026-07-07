@@ -12,6 +12,8 @@ const TYPE_INFO: Record<string, { label: string; color: string }> = {
     crossref:   { label: "Cross-ref",   color: "168, 130, 214" },
     apparatus:  { label: "Apparatus",   color: "198, 120, 95" },
     translation:{ label: "Translation", color: "100, 180, 160" },
+    llm:        { label: "LLM",         color: "214, 93, 177" },
+    thread:     { label: "Thread",      color: "240, 130, 40" },
     bare:       { label: "Annotation",  color: "136, 136, 136" },
 };
 
