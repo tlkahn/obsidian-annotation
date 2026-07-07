@@ -107,15 +107,31 @@ export default class AnnotationPlugin extends Plugin {
         this.bridge.customMarkCodes = Object.keys(defs);
 
         const rules: string[] = [];
+        const rejected: string[] = [];
         for (const [code, def] of Object.entries(defs)) {
             const props = Object.entries(def.style)
-                // guard against CSS injection via braces/semicolons in the file
-                .filter(([k, v]) => /^[a-zA-Z-]+$/.test(k) && !/[{};]/.test(v))
+                // Guard against CSS injection: no braces/semicolons (rule
+                // escape), and no colons, slashes, quotes, or url(...) in
+                // values — remote loads (IP beacons) need a protocol or
+                // path, and no simple CSS value does.
+                .filter(([k, v]) => {
+                    const ok =
+                        /^[a-zA-Z-]+$/.test(k) &&
+                        !/[{};:\/\\"']/.test(v) &&
+                        !/url\s*\(/i.test(v);
+                    if (!ok) rejected.push(`${code}.${k}`);
+                    return ok;
+                })
                 .map(([k, v]) => `${k}: ${v};`)
                 .join(" ");
             if (props) {
                 rules.push(`.annotation-mark-${code} { ${props} }`);
             }
+        }
+        if (rejected.length > 0) {
+            console.warn(
+                `[Annotation] Rejected unsafe style properties in .lit/marks.toml: ${rejected.join(", ")}`,
+            );
         }
         if (rules.length > 0) {
             this.customMarkStyleEl = document.createElement("style");
