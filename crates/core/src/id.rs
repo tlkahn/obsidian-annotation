@@ -17,8 +17,8 @@ pub fn extract_id(inner: &str) -> (Option<String>, &str) {
     let candidate = &rest[..close];
     let mut chars = candidate.chars();
     let valid = match chars.next() {
-        Some(first) if first.is_ascii_alphanumeric() => {
-            chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        Some(first) if first.is_alphanumeric() => {
+            chars.all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
         }
         _ => false,
     };
@@ -54,6 +54,12 @@ mod tests {
     #[test]
     fn id_with_dots_underscores_hyphens() {
         assert_eq!(extract_id("[a.b_c-1]"), (Some("a.b_c-1".to_string()), ""));
+    }
+
+    #[test]
+    fn unicode_letter_id_valid() {
+        assert_eq!(extract_id("[注1] x"), (Some("注1".to_string()), "x"));
+        assert_eq!(extract_id("[héllo-1] y"), (Some("héllo-1".to_string()), "y"));
     }
 
     #[test]
