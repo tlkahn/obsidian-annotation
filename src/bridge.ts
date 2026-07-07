@@ -3,7 +3,9 @@ import { FileSystemAdapter } from "obsidian";
 export interface Annotation {
     form: "compact" | "block";
     id: string | null;
-    annotation_type: "note" | "question" | "todo" | "crossref" | "apparatus" | "translation" | "llm" | "thread" | "bare";
+    /** The mark code when annotation_type is "mark" (e.g. "sic", "hi") */
+    mark: string | null;
+    annotation_type: "note" | "question" | "todo" | "crossref" | "apparatus" | "translation" | "llm" | "thread" | "mark" | "bare";
     certainty: "tentative" | "firm" | "neutral";
     scope:
         | { kind: "words"; value: number }
@@ -32,9 +34,20 @@ export interface ScopeRange {
 /** How a symmetric scope extends from the annotation position. */
 export type ResolutionMode = "backward" | "bidirectional";
 
+/** A custom mark definition from `.lit/marks.toml`. */
+export interface MarkDefinition {
+    label: string;
+    icon?: string;
+    /** CSS property → value map */
+    style: Record<string, string>;
+}
+
 export class WasmBridge {
     private initialized = false;
-    private parseAnnotationsFn: ((content: string) => string) | null = null;
+    /** Custom mark codes recognized by the parser (from `.lit/marks.toml`). */
+    customMarkCodes: string[] = [];
+    private parseAnnotationsFn: ((content: string, customMarksJson: string) => string) | null = null;
+    private parseMarksTomlFn: ((input: string) => string) | null = null;
     private resolveScopeRangeFn: ((content: string, charStart: number, charEnd: number, scopeJson: string, lang: string, mode: string) => string) | null = null;
 
     async init(pluginDir: string, adapter: FileSystemAdapter): Promise<void> {
@@ -46,6 +59,7 @@ export class WasmBridge {
         const wasmModule = await import("../crates/wasm/pkg/annotation_wasm");
         wasmModule.initSync({ module: wasmBinary });
         this.parseAnnotationsFn = wasmModule.parse_annotations;
+        this.parseMarksTomlFn = wasmModule.parse_marks_toml;
         this.resolveScopeRangeFn = wasmModule.resolve_scope_range;
 
         this.initialized = true;
@@ -56,7 +70,17 @@ export class WasmBridge {
         if (!this.initialized || !this.parseAnnotationsFn) {
             throw new Error("[Annotation] WASM not initialized. Call init() first.");
         }
-        return JSON.parse(this.parseAnnotationsFn(content));
+        return JSON.parse(this.parseAnnotationsFn(content, JSON.stringify(this.customMarkCodes)));
+    }
+
+    /** Parse a `.lit/marks.toml` document; null for invalid TOML. */
+    parseMarksToml(input: string): Record<string, MarkDefinition> | null {
+        if (!this.initialized || !this.parseMarksTomlFn) {
+            return null;
+        }
+        const result = this.parseMarksTomlFn(input);
+        if (result === "null") return null;
+        return JSON.parse(result);
     }
 
     resolveScopeRange(

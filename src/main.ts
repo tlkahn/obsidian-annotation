@@ -29,6 +29,9 @@ export default class AnnotationPlugin extends Plugin {
             return;
         }
 
+        // Custom philological marks from .lit/marks.toml (vault root)
+        await this.loadCustomMarks();
+
         // Live editing-mode renderer
         this.registerEditorExtension(createLiveModeExtension(this));
         this.registerEditorExtension(createEscapeAnnotationExtension(this));
@@ -79,7 +82,47 @@ export default class AnnotationPlugin extends Plugin {
     }
 
     onunload() {
+        this.customMarkStyleEl?.remove();
         console.log("[Annotation] Plugin unloaded.");
+    }
+
+    private customMarkStyleEl: HTMLStyleElement | null = null;
+
+    /** Load custom mark definitions from `.lit/marks.toml` (vault root),
+     *  register their codes with the parser, and inject their CSS. */
+    private async loadCustomMarks() {
+        let content: string;
+        try {
+            content = await this.app.vault.adapter.read(".lit/marks.toml");
+        } catch {
+            return; // no custom marks defined
+        }
+
+        const defs = this.bridge.parseMarksToml(content);
+        if (!defs) {
+            console.warn("[Annotation] Ignoring invalid .lit/marks.toml");
+            return;
+        }
+
+        this.bridge.customMarkCodes = Object.keys(defs);
+
+        const rules: string[] = [];
+        for (const [code, def] of Object.entries(defs)) {
+            const props = Object.entries(def.style)
+                // guard against CSS injection via braces/semicolons in the file
+                .filter(([k, v]) => /^[a-zA-Z-]+$/.test(k) && !/[{};]/.test(v))
+                .map(([k, v]) => `${k}: ${v};`)
+                .join(" ");
+            if (props) {
+                rules.push(`.annotation-mark-${code} { ${props} }`);
+            }
+        }
+        if (rules.length > 0) {
+            this.customMarkStyleEl = document.createElement("style");
+            this.customMarkStyleEl.textContent = rules.join("\n");
+            document.head.appendChild(this.customMarkStyleEl);
+        }
+        console.log(`[Annotation] Loaded ${this.bridge.customMarkCodes.length} custom mark(s)`);
     }
 
     /** Open or close the annotation side panel based on settings. */

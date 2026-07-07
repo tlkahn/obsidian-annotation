@@ -37,6 +37,30 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                 if (isInEditableRange(start, end, cursorPos, selStart, selEnd)) continue;
                 if (start < 0 || end > state.doc.length || start >= end) continue;
 
+                if (ann.annotation_type === "mark") {
+                    // Marks are display-only: hide the comment and apply
+                    // persistent styling to the resolved scope range instead
+                    // of rendering a widget.
+                    entries.push({ start, end, decoration: Decoration.replace({}) });
+                    const range = plugin.bridge.resolveScopeRange(content, start, end, ann.scope, "en");
+                    if (range && range.start < range.end && range.end <= state.doc.length) {
+                        const attributes: Record<string, string> = {};
+                        if (ann.body) {
+                            // A mark's note surfaces as a native tooltip
+                            attributes["title"] = ann.body;
+                        }
+                        entries.push({
+                            start: range.start,
+                            end: range.end,
+                            decoration: Decoration.mark({
+                                class: `annotation-mark annotation-mark-${ann.mark}`,
+                                attributes,
+                            }),
+                        });
+                    }
+                    continue;
+                }
+
                 let widget;
                 if (ann.form === "block") {
                     // Block annotations always get callout widget
