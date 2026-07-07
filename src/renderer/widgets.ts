@@ -43,7 +43,7 @@ function addScopeHoverHandlers(
 ): void {
     el.addEventListener("mouseenter", () => {
         const content = view.state.doc.toString();
-        const range = bridge.resolveScopeRange(content, charStart, annotation.scope, "en");
+        const range = bridge.resolveScopeRange(content, charStart, annotation.char_end, annotation.scope, "en");
         if (range && range.start < range.end) {
             dispatchScopeHighlight(view, range.start, range.end);
         }

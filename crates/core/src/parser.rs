@@ -206,6 +206,28 @@ mod tests {
     }
 
     #[test]
+    fn section_scope_integration() {
+        let doc = r"<!--- n: \h | section note --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].scope, Scope::Section);
+    }
+
+    #[test]
+    fn document_scope_integration() {
+        let doc = r"<!--- llm \d | summarize entire document --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].scope, Scope::Document);
+    }
+
+    #[test]
+    fn asym_scope_integration() {
+        let doc = r"<!--- q? 0\s2 | forward question --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].scope, Scope::AsymSentence(0, 2));
+        assert_eq!(anns[0].annotation_type, AnnotationType::Question);
+    }
+
+    #[test]
     fn apparatus_type_integration() {
         let doc = "<!--- app: | variant: ms. B has *prakāśa* --->";
         let anns = parse_annotations(doc);

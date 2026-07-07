@@ -10,7 +10,13 @@ export interface Annotation {
         | { kind: "paragraph"; value: number }
         | { kind: "page"; value: number }
         | { kind: "sentence"; value: number }
-        | { kind: "anchor"; value: string };
+        | { kind: "anchor"; value: string }
+        | { kind: "section" }
+        | { kind: "document" }
+        | { kind: "asym_words"; value: [number, number] }
+        | { kind: "asym_sentence"; value: [number, number] }
+        | { kind: "asym_paragraph"; value: [number, number] }
+        | { kind: "asym_page"; value: [number, number] };
     body: string | null;
     date: string | null;
     char_start: number;
@@ -23,10 +29,13 @@ export interface ScopeRange {
     end: number;
 }
 
+/** How a symmetric scope extends from the annotation position. */
+export type ResolutionMode = "backward" | "bidirectional";
+
 export class WasmBridge {
     private initialized = false;
     private parseAnnotationsFn: ((content: string) => string) | null = null;
-    private resolveScopeRangeFn: ((content: string, charStart: number, scopeJson: string, lang: string) => string) | null = null;
+    private resolveScopeRangeFn: ((content: string, charStart: number, charEnd: number, scopeJson: string, lang: string, mode: string) => string) | null = null;
 
     async init(pluginDir: string, adapter: FileSystemAdapter): Promise<void> {
         if (this.initialized) return;
@@ -50,11 +59,18 @@ export class WasmBridge {
         return JSON.parse(this.parseAnnotationsFn(content));
     }
 
-    resolveScopeRange(content: string, charStart: number, scope: Annotation["scope"], lang: string): ScopeRange | null {
+    resolveScopeRange(
+        content: string,
+        charStart: number,
+        charEnd: number,
+        scope: Annotation["scope"],
+        lang: string,
+        mode: ResolutionMode = "backward",
+    ): ScopeRange | null {
         if (!this.initialized || !this.resolveScopeRangeFn) {
             return null;
         }
-        const result = this.resolveScopeRangeFn(content, charStart, JSON.stringify(scope), lang);
+        const result = this.resolveScopeRangeFn(content, charStart, charEnd, JSON.stringify(scope), lang, mode);
         if (result === "null") return null;
         return JSON.parse(result);
     }

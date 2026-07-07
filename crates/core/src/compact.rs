@@ -11,7 +11,7 @@ static ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
+    Regex::new(r"^(_{1,}|[0-9]_[0-9]|[0-9]\\[spf][0-9]|\\h|\\d|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
 });
 
 /// Parse a compact form annotation from the inner text of an annotation comment.
@@ -373,6 +373,62 @@ mod tests {
         let a = parse_compact(r"n: \s___ | note");
         let b = parse_compact(r"n: \sss | note");
         assert_eq!(a.scope, b.scope);
+    }
+
+    // Section / Document / asymmetric scopes
+
+    #[test]
+    fn section_scope_with_body() {
+        let ann = parse_compact(r"n: \h | section note");
+        assert_eq!(ann.scope, Scope::Section);
+        assert_eq!(ann.body, Some("section note".to_string()));
+    }
+
+    #[test]
+    fn document_scope_with_body() {
+        let ann = parse_compact(r"llm \d | summarize entire document");
+        assert_eq!(ann.annotation_type, AnnotationType::Llm);
+        assert_eq!(ann.scope, Scope::Document);
+    }
+
+    #[test]
+    fn section_scope_at_end() {
+        let ann = parse_compact(r"cf \h");
+        assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
+        assert_eq!(ann.scope, Scope::Section);
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn document_scope_at_end() {
+        let ann = parse_compact(r"cf \d");
+        assert_eq!(ann.scope, Scope::Document);
+    }
+
+    #[test]
+    fn asym_paragraph_scope_with_body() {
+        let ann = parse_compact(r"n: 2\p1 | two before one after");
+        assert_eq!(ann.scope, Scope::AsymParagraph(2, 1));
+        assert_eq!(ann.body, Some("two before one after".to_string()));
+    }
+
+    #[test]
+    fn asym_words_scope_with_body() {
+        let ann = parse_compact("n: 3_1 | words around");
+        assert_eq!(ann.scope, Scope::AsymWords(3, 1));
+    }
+
+    #[test]
+    fn asym_sentence_scope_at_end() {
+        let ann = parse_compact(r"cf 2\s1");
+        assert_eq!(ann.scope, Scope::AsymSentence(2, 1));
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn asym_page_scope_forward_only() {
+        let ann = parse_compact(r"n: 0\s2 | forward only");
+        assert_eq!(ann.scope, Scope::AsymSentence(0, 2));
     }
 
     // llm / th types

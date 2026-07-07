@@ -1,23 +1,84 @@
 use crate::scanner::utf16_len;
 use crate::types::Scope;
 
+/// How a symmetric scope extends from the annotation position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResolutionMode {
+    /// Scope extends only backward from the annotation (spec default).
+    #[default]
+    Backward,
+    /// Scope extends both backward and forward by the same count.
+    /// Used in specific UI contexts.
+    Bidirectional,
+}
+
+impl ResolutionMode {
+    /// Parse a mode string from the FFI boundary. Unknown values fall back
+    /// to the backward default.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "bidirectional" => Self::Bidirectional,
+            _ => Self::Backward,
+        }
+    }
+}
+
 /// Resolve the text range that an annotation's scope refers to.
 ///
-/// Given the full document content, the annotation's UTF-16 start offset,
-/// and its scope, returns `Some((scope_start, scope_end))` in UTF-16 offsets,
-/// or `None` if the scope cannot be resolved.
+/// Given the full document content, the annotation's UTF-16 start and end
+/// offsets, its scope, and the resolution mode, returns
+/// `Some((scope_start, scope_end))` in UTF-16 offsets, or `None` if the
+/// scope cannot be resolved. `char_end` is only consulted by scopes that
+/// walk forward past the annotation's own text (asymmetric scopes and
+/// bidirectional mode).
 pub fn resolve_scope_range(
     content: &str,
     char_start: usize,
+    char_end: usize,
     scope: &Scope,
     lang: &str,
+    mode: ResolutionMode,
 ) -> Option<(usize, usize)> {
+    // Bidirectional mode extends symmetric scopes forward by the same count
+    if mode == ResolutionMode::Bidirectional {
+        let asym = match scope {
+            Scope::Words(n) => Some(Scope::AsymWords(*n, *n)),
+            Scope::Sentence(n) => Some(Scope::AsymSentence(*n, *n)),
+            Scope::Paragraph(n) => Some(Scope::AsymParagraph(*n, *n)),
+            Scope::Page(n) => Some(Scope::AsymPage(*n, *n)),
+            _ => None,
+        };
+        if let Some(asym) = asym {
+            return resolve_scope_range(
+                content,
+                char_start,
+                char_end,
+                &asym,
+                lang,
+                ResolutionMode::Backward,
+            );
+        }
+    }
     match scope {
         Scope::Words(n) => resolve_words(content, char_start, *n as usize),
         Scope::Sentence(n) => resolve_sentence(content, char_start, *n as usize, lang),
         Scope::Paragraph(n) => resolve_paragraph(content, char_start, *n as usize),
         Scope::Page(n) => resolve_page(content, char_start, *n as usize),
         Scope::Anchor(text) => resolve_anchor(content, char_start, text),
+        Scope::Section => resolve_section(content, char_start),
+        Scope::Document => resolve_document(content),
+        Scope::AsymWords(n, m) => {
+            resolve_asym_words(content, char_start, char_end, *n as usize, *m as usize)
+        }
+        Scope::AsymParagraph(n, m) => {
+            resolve_asym_paragraph(content, char_start, char_end, *n as usize, *m as usize)
+        }
+        Scope::AsymPage(n, m) => {
+            resolve_asym_page(content, char_start, char_end, *n as usize, *m as usize)
+        }
+        Scope::AsymSentence(n, m) => {
+            resolve_asym_sentence(content, char_start, char_end, *n as usize, *m as usize, lang)
+        }
     }
 }
 
@@ -33,12 +94,9 @@ fn utf16_to_byte(s: &str, utf16_offset: usize) -> usize {
     s.len()
 }
 
-/// Resolve `Words(n)` scope: find the N preceding words before `char_start`.
-fn resolve_words(content: &str, char_start: usize, n: usize) -> Option<(usize, usize)> {
-    if n == 0 {
-        return None;
-    }
-    let byte_start = utf16_to_byte(content, char_start);
+/// Byte range of the N words preceding `byte_start`, clamped to the
+/// document start when fewer are available.
+fn words_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, usize)> {
     let text_before = &content[..byte_start];
 
     // Trim trailing whitespace to find the end of actual text
@@ -76,10 +134,81 @@ fn resolve_words(content: &str, char_start: usize, n: usize) -> Option<(usize, u
         scope_start_byte = 0;
     }
 
-    let scope_start_utf16 = utf16_len(&content[..scope_start_byte]);
-    let scope_end_utf16 = utf16_len(&content[..scope_end_byte]);
+    Some((scope_start_byte, scope_end_byte))
+}
 
-    Some((scope_start_utf16, scope_end_utf16))
+/// Byte range of the M words following `byte_end`, clamped to the document
+/// end when fewer are available.
+fn words_after(content: &str, byte_end: usize, m: usize) -> Option<(usize, usize)> {
+    let text_after = &content[byte_end..];
+    let scope_start_byte = byte_end + (text_after.len() - text_after.trim_start().len());
+    let text = &content[scope_start_byte..];
+    if text.trim_end().is_empty() {
+        return None;
+    }
+
+    let mut words_found = 0;
+    let mut scope_end_byte = scope_start_byte + text.trim_end().len();
+    let mut in_word = false;
+
+    for (i, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if in_word {
+                words_found += 1;
+                if words_found >= m {
+                    scope_end_byte = scope_start_byte + i;
+                    break;
+                }
+                in_word = false;
+            }
+        } else {
+            in_word = true;
+        }
+    }
+
+    Some((scope_start_byte, scope_end_byte))
+}
+
+/// Combine optional backward and forward byte ranges into a UTF-16 range.
+fn combine_ranges(
+    content: &str,
+    back: Option<(usize, usize)>,
+    fwd: Option<(usize, usize)>,
+) -> Option<(usize, usize)> {
+    let (start, end) = match (back, fwd) {
+        (Some((s, _)), Some((_, e))) => (s, e),
+        (Some((s, e)), None) => (s, e),
+        (None, Some((s, e))) => (s, e),
+        (None, None) => return None,
+    };
+    Some((utf16_len(&content[..start]), utf16_len(&content[..end])))
+}
+
+/// Resolve `Words(n)` scope: find the N preceding words before `char_start`.
+fn resolve_words(content: &str, char_start: usize, n: usize) -> Option<(usize, usize)> {
+    if n == 0 {
+        return None;
+    }
+    let byte_start = utf16_to_byte(content, char_start);
+    combine_ranges(content, words_before(content, byte_start, n), None)
+}
+
+/// Resolve `AsymWords(n, m)`: N words before the annotation, M words after it.
+fn resolve_asym_words(
+    content: &str,
+    char_start: usize,
+    char_end: usize,
+    n: usize,
+    m: usize,
+) -> Option<(usize, usize)> {
+    if n == 0 && m == 0 {
+        return None;
+    }
+    let byte_start = utf16_to_byte(content, char_start);
+    let byte_end = utf16_to_byte(content, char_end);
+    let back = if n > 0 { words_before(content, byte_start, n) } else { None };
+    let fwd = if m > 0 { words_after(content, byte_end, m) } else { None };
+    combine_ranges(content, back, fwd)
 }
 
 /// Find `needle` in `haystack[start_from..]`, treating any run of whitespace in the
@@ -128,13 +257,9 @@ fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(
     }
 }
 
-/// Resolve `Sentence(n)` scope: find the last N sentences before `char_start` using sentenza.
-/// Extracts the current paragraph (up to `char_start`) and splits into sentences.
-fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
-    if n == 0 {
-        return None;
-    }
-    let byte_start = utf16_to_byte(content, char_start);
+/// Byte range of the last N sentences before `byte_start` using sentenza.
+/// Extracts the current paragraph (up to `byte_start`) and splits into sentences.
+fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
     let text_before = &content[..byte_start];
     let trimmed = text_before.trim_end();
     if trimmed.is_empty() {
@@ -169,19 +294,74 @@ fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> O
     let scope_start_byte = para_byte_start + first_start;
     let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
 
-    let scope_start_utf16 = utf16_len(&content[..scope_start_byte]);
-    let scope_end_utf16 = utf16_len(&content[..scope_end_byte]);
-
-    Some((scope_start_utf16, scope_end_utf16))
+    Some((scope_start_byte, scope_end_byte))
 }
 
-/// Resolve `Paragraph(n)` scope: find the current paragraph + n-1 preceding paragraphs.
-/// Paragraphs are delimited by double newlines (`\n\n`).
-fn resolve_paragraph(content: &str, char_start: usize, n: usize) -> Option<(usize, usize)> {
+/// Byte range of the first M sentences following `byte_end` (starting with
+/// the remainder of the current sentence), limited to the current paragraph
+/// and clamped to what is available.
+fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Option<(usize, usize)> {
+    let after = &content[byte_end..];
+    let start = byte_end + (after.len() - after.trim_start().len());
+    let text = &content[start..];
+
+    // Limit to the current paragraph
+    let para_len = text.find("\n\n").unwrap_or(text.len());
+    let paragraph = text[..para_len].trim_end();
+    if paragraph.is_empty() {
+        return None;
+    }
+
+    let sentences = sentenza::split_sentences(paragraph, lang);
+    if sentences.is_empty() {
+        return None;
+    }
+
+    let take = m.min(sentences.len());
+    let last_sentence = &sentences[take - 1];
+
+    // ws_flexible_find: sentenza may normalize whitespace during preprocessing
+    let (first_start, first_end) = ws_flexible_find(paragraph, &sentences[0], 0)?;
+    let (_, last_end) = if take == 1 {
+        (first_start, first_end)
+    } else {
+        ws_flexible_find(paragraph, last_sentence, first_start)?
+    };
+
+    Some((start + first_start, start + last_end))
+}
+
+/// Resolve `Sentence(n)` scope: find the last N sentences before `char_start`.
+fn resolve_sentence(content: &str, char_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
     if n == 0 {
         return None;
     }
     let byte_start = utf16_to_byte(content, char_start);
+    combine_ranges(content, sentences_before(content, byte_start, n, lang), None)
+}
+
+/// Resolve `AsymSentence(n, m)`: N sentences before, M after the annotation.
+fn resolve_asym_sentence(
+    content: &str,
+    char_start: usize,
+    char_end: usize,
+    n: usize,
+    m: usize,
+    lang: &str,
+) -> Option<(usize, usize)> {
+    if n == 0 && m == 0 {
+        return None;
+    }
+    let byte_start = utf16_to_byte(content, char_start);
+    let byte_end = utf16_to_byte(content, char_end);
+    let back = if n > 0 { sentences_before(content, byte_start, n, lang) } else { None };
+    let fwd = if m > 0 { sentences_after(content, byte_end, m, lang) } else { None };
+    combine_ranges(content, back, fwd)
+}
+
+/// Byte range of the current paragraph + n-1 preceding paragraphs before
+/// `byte_start`. Paragraphs are delimited by double newlines (`\n\n`).
+fn paragraphs_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, usize)> {
     let text_before = &content[..byte_start];
     let trimmed = text_before.trim_end();
     if trimmed.is_empty() {
@@ -216,18 +396,74 @@ fn resolve_paragraph(content: &str, char_start: usize, n: usize) -> Option<(usiz
     };
     let scope_start_byte = para_boundaries[boundary_idx];
 
-    let scope_start_utf16 = utf16_len(&content[..scope_start_byte]);
-    let scope_end_utf16 = utf16_len(&content[..scope_end_byte]);
-
-    Some((scope_start_utf16, scope_end_utf16))
+    Some((scope_start_byte, scope_end_byte))
 }
 
-/// Resolve `Page(n)` scope: find pages delimited by form feed (`\x0C`) characters.
-fn resolve_page(content: &str, char_start: usize, n: usize) -> Option<(usize, usize)> {
+/// Byte range of the M paragraphs following `byte_end` (starting with the
+/// remainder of the current paragraph), clamped to the document end.
+fn paragraphs_after(content: &str, byte_end: usize, m: usize) -> Option<(usize, usize)> {
+    let after = &content[byte_end..];
+    let start = byte_end + (after.len() - after.trim_start().len());
+    let text = &content[start..];
+    if text.trim_end().is_empty() {
+        return None;
+    }
+
+    let mut boundaries_found = 0;
+    let mut end = start + text.trim_end().len();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'\n' && bytes[i + 1] == b'\n' {
+            boundaries_found += 1;
+            if boundaries_found >= m {
+                end = start + text[..i].trim_end().len();
+                break;
+            }
+            let mut e = i + 2;
+            while e < bytes.len() && bytes[e] == b'\n' {
+                e += 1;
+            }
+            i = e;
+        } else {
+            i += 1;
+        }
+    }
+
+    Some((start, end))
+}
+
+/// Resolve `Paragraph(n)` scope: find the current paragraph + n-1 preceding paragraphs.
+/// Paragraphs are delimited by double newlines (`\n\n`).
+fn resolve_paragraph(content: &str, char_start: usize, n: usize) -> Option<(usize, usize)> {
     if n == 0 {
         return None;
     }
     let byte_start = utf16_to_byte(content, char_start);
+    combine_ranges(content, paragraphs_before(content, byte_start, n), None)
+}
+
+/// Resolve `AsymParagraph(n, m)`: N paragraphs before, M after the annotation.
+fn resolve_asym_paragraph(
+    content: &str,
+    char_start: usize,
+    char_end: usize,
+    n: usize,
+    m: usize,
+) -> Option<(usize, usize)> {
+    if n == 0 && m == 0 {
+        return None;
+    }
+    let byte_start = utf16_to_byte(content, char_start);
+    let byte_end = utf16_to_byte(content, char_end);
+    let back = if n > 0 { paragraphs_before(content, byte_start, n) } else { None };
+    let fwd = if m > 0 { paragraphs_after(content, byte_end, m) } else { None };
+    combine_ranges(content, back, fwd)
+}
+
+/// Byte range of the current page + n-1 preceding pages before `byte_start`.
+/// Pages are delimited by form feed (`\x0C`) characters.
+fn pages_before(content: &str, byte_start: usize, n: usize) -> Option<(usize, usize)> {
     let text_before = &content[..byte_start];
     let trimmed = text_before.trim_end();
     if trimmed.is_empty() {
@@ -251,10 +487,126 @@ fn resolve_page(content: &str, char_start: usize, n: usize) -> Option<(usize, us
     };
     let scope_start_byte = page_boundaries[boundary_idx];
 
-    let scope_start_utf16 = utf16_len(&content[..scope_start_byte]);
-    let scope_end_utf16 = utf16_len(&content[..scope_end_byte]);
+    Some((scope_start_byte, scope_end_byte))
+}
 
-    Some((scope_start_utf16, scope_end_utf16))
+/// Byte range of the M pages following `byte_end` (starting with the
+/// remainder of the current page), clamped to the document end.
+fn pages_after(content: &str, byte_end: usize, m: usize) -> Option<(usize, usize)> {
+    let after = &content[byte_end..];
+    let start = byte_end + (after.len() - after.trim_start().len());
+    let text = &content[start..];
+    if text.trim_end().is_empty() {
+        return None;
+    }
+
+    let mut boundaries_found = 0;
+    let mut end = start + text.trim_end().len();
+    for (i, b) in text.bytes().enumerate() {
+        if b == b'\x0C' {
+            boundaries_found += 1;
+            if boundaries_found >= m {
+                end = start + text[..i].trim_end().len();
+                break;
+            }
+        }
+    }
+
+    Some((start, end))
+}
+
+/// Resolve `Page(n)` scope: find pages delimited by form feed (`\x0C`) characters.
+fn resolve_page(content: &str, char_start: usize, n: usize) -> Option<(usize, usize)> {
+    if n == 0 {
+        return None;
+    }
+    let byte_start = utf16_to_byte(content, char_start);
+    combine_ranges(content, pages_before(content, byte_start, n), None)
+}
+
+/// Resolve `AsymPage(n, m)`: N pages before, M after the annotation.
+fn resolve_asym_page(
+    content: &str,
+    char_start: usize,
+    char_end: usize,
+    n: usize,
+    m: usize,
+) -> Option<(usize, usize)> {
+    if n == 0 && m == 0 {
+        return None;
+    }
+    let byte_start = utf16_to_byte(content, char_start);
+    let byte_end = utf16_to_byte(content, char_end);
+    let back = if n > 0 { pages_before(content, byte_start, n) } else { None };
+    let fwd = if m > 0 { pages_after(content, byte_end, m) } else { None };
+    combine_ranges(content, back, fwd)
+}
+
+/// Resolve `Document` scope: the entire file.
+fn resolve_document(content: &str) -> Option<(usize, usize)> {
+    if content.is_empty() {
+        return None;
+    }
+    Some((0, utf16_len(content)))
+}
+
+/// The ATX heading level of a markdown line (1-6), or None.
+fn heading_level(line: &str) -> Option<u8> {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|&c| c == '#').count();
+    if (1..=6).contains(&hashes) {
+        let rest = &trimmed[hashes..];
+        if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
+            return Some(hashes as u8);
+        }
+    }
+    None
+}
+
+/// Resolve `Section` scope: from the nearest heading at-or-before the
+/// annotation to just before the next heading of equal or higher level
+/// (trimmed of trailing whitespace), or EOF. With no preceding heading the
+/// section clamps to the document start and any heading terminates it.
+/// Headings inside fenced code blocks are ignored.
+fn resolve_section(content: &str, char_start: usize) -> Option<(usize, usize)> {
+    let byte_start = utf16_to_byte(content, char_start);
+    let fenced = crate::scanner::find_fenced_ranges(content);
+
+    // Collect heading lines as (line_start_byte, level)
+    let mut headings: Vec<(usize, u8)> = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split('\n') {
+        if !crate::scanner::is_in_fenced_range(offset, &fenced) {
+            if let Some(level) = heading_level(line) {
+                headings.push((offset, level));
+            }
+        }
+        offset += line.len() + 1;
+    }
+
+    // Nearest heading at-or-before the annotation; without one, the section
+    // is the document preamble (level 7 = terminated by any heading).
+    let (sec_start, level) = headings
+        .iter()
+        .rev()
+        .find(|(pos, _)| *pos <= byte_start)
+        .copied()
+        .unwrap_or((0, 7));
+
+    let sec_end = headings
+        .iter()
+        .find(|(pos, lvl)| *pos > sec_start && *lvl <= level)
+        .map(|&(pos, _)| pos)
+        .unwrap_or(content.len());
+
+    let end_trimmed = content[..sec_end].trim_end().len();
+    if end_trimmed <= sec_start {
+        return None;
+    }
+    Some((
+        utf16_len(&content[..sec_start]),
+        utf16_len(&content[..end_trimmed]),
+    ))
 }
 
 /// Resolve `Anchor("text")` scope: find the anchor text before the annotation.
@@ -280,7 +632,7 @@ mod tests {
     fn words_1_single_preceding_word() {
         let content = "hello <!-- n: _ | note -->";
         let char_start = 6;
-        let result = resolve_scope_range(content, char_start, &Scope::Words(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, 5))); // "hello"
     }
 
@@ -290,7 +642,7 @@ mod tests {
         //                ^^^^^^^^^ "brown fox" = offsets 10..19
         let content = "the quick brown fox <!-- n: __ | note -->";
         let char_start = 20; // position of '<'
-        let result = resolve_scope_range(content, char_start, &Scope::Words(2), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(2), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((10, 19))); // "brown fox"
     }
 
@@ -298,7 +650,7 @@ mod tests {
     fn words_3_three_preceding_words() {
         let content = "the quick brown fox <!-- n: ___ | note -->";
         let char_start = 20;
-        let result = resolve_scope_range(content, char_start, &Scope::Words(3), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(3), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((4, 19))); // "quick brown fox"
     }
 
@@ -307,7 +659,7 @@ mod tests {
         // Only 2 words but requesting 5 — should highlight all available
         let content = "brown fox <!-- n: | note -->";
         let char_start = 10;
-        let result = resolve_scope_range(content, char_start, &Scope::Words(5), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(5), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, 9))); // "brown fox"
     }
 
@@ -316,7 +668,7 @@ mod tests {
         // CJK: 你好 世界 — 2 words, each 2 UTF-16 units
         let content = "你好 世界 <!-- n: __ | note -->";
         let char_start = 5; // 你(1) 好(1) space(1) 世(1) 界(1) = 5 UTF-16 units, then space before <!--
-        let result = resolve_scope_range(content, char_start, &Scope::Words(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((3, 5))); // "世界"
     }
 
@@ -324,7 +676,7 @@ mod tests {
     fn words_no_preceding_text() {
         let content = "<!-- n: _ | note -->";
         let char_start = 0;
-        let result = resolve_scope_range(content, char_start, &Scope::Words(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(1), "en", ResolutionMode::Backward);
         assert_eq!(result, None);
     }
 
@@ -332,7 +684,7 @@ mod tests {
     fn words_only_whitespace_before() {
         let content = "   <!-- n: _ | note -->";
         let char_start = 3;
-        let result = resolve_scope_range(content, char_start, &Scope::Words(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Words(1), "en", ResolutionMode::Backward);
         assert_eq!(result, None);
     }
 
@@ -342,7 +694,7 @@ mod tests {
     fn sentence_single_sentence() {
         let content = "The cat sat on the mat.<!-- n: | note -->";
         let char_start = 23;
-        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Sentence(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, 23))); // "The cat sat on the mat."
     }
 
@@ -350,7 +702,7 @@ mod tests {
     fn sentence_last_of_multiple_sentences() {
         let content = "The dog ran. The cat sat.<!-- n: | note -->";
         let char_start = 25;
-        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Sentence(1), "en", ResolutionMode::Backward);
         // Should highlight "The cat sat." (last sentence)
         assert_eq!(result, Some((13, 25)));
     }
@@ -359,7 +711,7 @@ mod tests {
     fn sentence_two_of_multiple() {
         let content = "First one. The dog ran. The cat sat.<!-- n: \\ss | note -->";
         let char_start = 36;
-        let result = resolve_scope_range(content, char_start, &Scope::Sentence(2), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Sentence(2), "en", ResolutionMode::Backward);
         // Should highlight "The dog ran. The cat sat."
         assert_eq!(result, Some((11, 36)));
     }
@@ -368,7 +720,7 @@ mod tests {
     fn sentence_more_than_available() {
         let content = "The dog ran. The cat sat.<!-- n: \\sss | note -->";
         let char_start = 25;
-        let result = resolve_scope_range(content, char_start, &Scope::Sentence(3), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Sentence(3), "en", ResolutionMode::Backward);
         // Only 2 sentences available — should highlight both
         assert_eq!(result, Some((0, 25)));
     }
@@ -378,7 +730,7 @@ mod tests {
         // Annotation is in the middle of a sentence
         let content = "The dog ran. The cat sat<!-- n: | note --> on the mat.";
         let char_start = 25;
-        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Sentence(1), "en", ResolutionMode::Backward);
         // Should highlight "The cat sat" (partial sentence before annotation)
         assert_eq!(result, Some((13, 25)));
     }
@@ -387,7 +739,7 @@ mod tests {
     fn sentence_no_preceding_text() {
         let content = "<!-- n: | note -->";
         let char_start = 0;
-        let result = resolve_scope_range(content, char_start, &Scope::Sentence(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Sentence(1), "en", ResolutionMode::Backward);
         assert_eq!(result, None);
     }
 
@@ -398,7 +750,7 @@ mod tests {
         let content = "First paragraph.\n\nSecond paragraph text.<!-- n: \\p | note -->";
         // "First paragraph.\n\nSecond paragraph text." = 18 + 22 = 40 chars
         let char_start = 40;
-        let result = resolve_scope_range(content, char_start, &Scope::Paragraph(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Paragraph(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((18, 40))); // "Second paragraph text."
     }
 
@@ -406,7 +758,7 @@ mod tests {
     fn paragraph_2_current_and_preceding() {
         let content = "First para.\n\nSecond para.\n\nThird para.<!-- n: \\pp | note -->";
         let char_start = 38;
-        let result = resolve_scope_range(content, char_start, &Scope::Paragraph(2), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Paragraph(2), "en", ResolutionMode::Backward);
         // Should include "Second para.\n\nThird para."
         assert_eq!(result, Some((13, 38)));
     }
@@ -415,7 +767,7 @@ mod tests {
     fn paragraph_more_than_available() {
         let content = "Only paragraph.<!-- n: \\ppp | note -->";
         let char_start = 15;
-        let result = resolve_scope_range(content, char_start, &Scope::Paragraph(3), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Paragraph(3), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, 15))); // "Only paragraph."
     }
 
@@ -423,7 +775,7 @@ mod tests {
     fn paragraph_no_preceding_text() {
         let content = "<!-- n: \\p | note -->";
         let char_start = 0;
-        let result = resolve_scope_range(content, char_start, &Scope::Paragraph(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Paragraph(1), "en", ResolutionMode::Backward);
         assert_eq!(result, None);
     }
 
@@ -434,7 +786,7 @@ mod tests {
         // \x0C is form feed (page break)
         let content = "Page one.\x0CPage two text.<!-- n: \\f | note -->";
         let char_start = 25;
-        let result = resolve_scope_range(content, char_start, &Scope::Page(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Page(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((10, 25))); // "Page two text."
     }
 
@@ -442,7 +794,7 @@ mod tests {
     fn page_2_current_and_preceding() {
         let content = "Page one.\x0CPage two.\x0CPage three.<!-- n: | note -->";
         let char_start = 31;
-        let result = resolve_scope_range(content, char_start, &Scope::Page(2), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Page(2), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((10, 31))); // "Page two.\x0CPage three."
     }
 
@@ -451,7 +803,7 @@ mod tests {
         // No form feed — treat entire text as one page
         let content = "All one page.<!-- n: \\f | note -->";
         let char_start = 14;
-        let result = resolve_scope_range(content, char_start, &Scope::Page(1), "en");
+        let result = resolve_scope_range(content, char_start, char_start, &Scope::Page(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, 14)));
     }
 
@@ -462,8 +814,8 @@ mod tests {
         let content = "The term anuttara appears in this text.<!-- n: ^\"anuttara\" | note -->";
         let char_start = 39;
         let result = resolve_scope_range(
-            content, char_start,
-            &Scope::Anchor("anuttara".to_string()), "en",
+            content, char_start, char_start,
+            &Scope::Anchor("anuttara".to_string()), "en", ResolutionMode::Backward,
         );
         assert_eq!(result, Some((9, 17))); // "anuttara" at offset 9..17
     }
@@ -473,10 +825,330 @@ mod tests {
         let content = "No match here.<!-- n: ^\"missing\" | note -->";
         let char_start = 15;
         let result = resolve_scope_range(
-            content, char_start,
-            &Scope::Anchor("missing".to_string()), "en",
+            content, char_start, char_start,
+            &Scope::Anchor("missing".to_string()), "en", ResolutionMode::Backward,
         );
         assert_eq!(result, None);
+    }
+
+    // ── Document scope ──
+
+    #[test]
+    fn document_whole_file() {
+        let content = "First paragraph.\n\nSecond paragraph.<!--- n: \\d | note --->\n\nThird.";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, ann + 22, &Scope::Document, "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, content.len())));
+    }
+
+    #[test]
+    fn document_utf16_cjk() {
+        // 你好世界 = 4 UTF-16 units; total = 4 + 22 comment chars
+        let content = "你好世界<!--- llm \\d | 总结 --->";
+        let result = resolve_scope_range(content, 4, 25, &Scope::Document, "en", ResolutionMode::Backward);
+        let expected_len = content.chars().map(|c| c.len_utf16()).sum::<usize>();
+        assert_eq!(result, Some((0, expected_len)));
+    }
+
+    // ── Section scope ──
+
+    #[test]
+    fn section_basic() {
+        let content = "## Methods\n\nSome methodology text here.\n\n<!--- n: \\h | note --->\n\n## Results\n\nMore.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | note --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        // From the start of "## Methods" up to (trimmed) just before "## Results"
+        assert_eq!(result, Some((0, ann_end)));
+    }
+
+    #[test]
+    fn section_nearest_subheading() {
+        let content = "## Methods\n\n### Detail\n\nDetail text.<!--- n: \\h | x --->\n\n## Results";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | x --->".len();
+        let start = content.find("### Detail").unwrap();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((start, ann_end)));
+    }
+
+    #[test]
+    fn section_spans_lower_level_headings() {
+        let content = "# Top\n\nIntro.<!--- n: \\h | x --->\n\n## Sub\n\nSub text.\n\n# Next";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        // Section of "# Top" runs through "## Sub" (lower level) up to "# Next"
+        let expected_end = content.find("\n\n# Next").unwrap();
+        assert_eq!(result, Some((0, expected_end)));
+    }
+
+    #[test]
+    fn section_no_preceding_heading_clamps_to_doc_start() {
+        let content = "Preamble text.<!--- n: \\h | x --->\n\n# First\n\nBody.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, ann_end)));
+    }
+
+    #[test]
+    fn section_extends_to_eof() {
+        let content = "## Last\n\nFinal text.<!--- n: \\h | x --->\n";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, ann_end)));
+    }
+
+    #[test]
+    fn section_ignores_heading_in_code_fence() {
+        let content = "## Real\n\ntext<!--- n: \\h | x --->\n\n```\n# fenced\n```\n\n## Next";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: \\h | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Section, "en", ResolutionMode::Backward);
+        // Section ends just before "## Next" (trimmed), running through the fence
+        let expected_end = content.rfind("\n\n## Next").unwrap();
+        assert_eq!(result, Some((0, expected_end)));
+    }
+
+    #[test]
+    fn section_utf16_cjk() {
+        let content = "## 标题\n\n你好世界<!--- n: \\h | 注 --->\n\n## 下节";
+        let ann_utf16: usize = content[..content.find("<!---").unwrap()]
+            .chars().map(|c| c.len_utf16()).sum();
+        let comment_utf16: usize = "<!--- n: \\h | 注 --->".chars().map(|c| c.len_utf16()).sum();
+        let result = resolve_scope_range(content, ann_utf16, ann_utf16 + comment_utf16, &Scope::Section, "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, ann_utf16 + comment_utf16)));
+    }
+
+    // ── Bidirectional mode ──
+
+    #[test]
+    fn bidirectional_words() {
+        let content = "alpha beta <!--- x ---> gamma delta";
+        let result = resolve_scope_range(content, 11, 23, &Scope::Words(1), "en", ResolutionMode::Bidirectional);
+        assert_eq!(result, Some((6, 29))); // "beta" + "gamma"
+    }
+
+    #[test]
+    fn bidirectional_equals_symmetric_asym() {
+        let content = "one two three <!--- x ---> four five six";
+        let bidi = resolve_scope_range(content, 14, 26, &Scope::Words(2), "en", ResolutionMode::Bidirectional);
+        let asym = resolve_scope_range(content, 14, 26, &Scope::AsymWords(2, 2), "en", ResolutionMode::Backward);
+        assert_eq!(bidi, asym);
+        assert!(bidi.is_some());
+    }
+
+    #[test]
+    fn bidirectional_paragraph() {
+        let content = "Para A.\n\nPara B.\n\n<!--- x --->\n\nPara C.\n\nPara D.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- x --->".len();
+        let bidi = resolve_scope_range(content, ann, ann_end, &Scope::Paragraph(1), "en", ResolutionMode::Bidirectional);
+        let b_start = content.find("Para B.").unwrap();
+        let c_end = content.find("Para C.").unwrap() + "Para C.".len();
+        assert_eq!(bidi, Some((b_start, c_end)));
+    }
+
+    #[test]
+    fn bidirectional_does_not_affect_anchor() {
+        let content = "The term anuttara appears.<!--- x --->";
+        let backward = resolve_scope_range(content, 26, 38, &Scope::Anchor("anuttara".to_string()), "en", ResolutionMode::Backward);
+        let bidi = resolve_scope_range(content, 26, 38, &Scope::Anchor("anuttara".to_string()), "en", ResolutionMode::Bidirectional);
+        assert_eq!(backward, bidi);
+        assert!(backward.is_some());
+    }
+
+    #[test]
+    fn backward_mode_words_unchanged() {
+        let content = "alpha beta <!--- x ---> gamma delta";
+        let result = resolve_scope_range(content, 11, 23, &Scope::Words(1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((6, 10))); // "beta" only
+    }
+
+    // ── Asymmetric words ──
+
+    #[test]
+    fn asym_words_before_and_after() {
+        let content = "alpha beta <!--- n: 2_1 | x ---> gamma delta";
+        let ann = 11;
+        let ann_end = 32;
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymWords(2, 1), "en", ResolutionMode::Backward);
+        // "alpha beta" backward + "gamma" forward
+        assert_eq!(result, Some((0, 38)));
+    }
+
+    #[test]
+    fn asym_words_forward_only() {
+        let content = "alpha beta <!--- n: 0_1 | x ---> gamma delta";
+        let result = resolve_scope_range(content, 11, 32, &Scope::AsymWords(0, 1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((33, 38))); // "gamma"
+    }
+
+    #[test]
+    fn asym_words_backward_only() {
+        let content = "alpha beta <!--- n: 2_0 | x ---> gamma delta";
+        let result = resolve_scope_range(content, 11, 32, &Scope::AsymWords(2, 0), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, 10))); // "alpha beta"
+    }
+
+    #[test]
+    fn asym_words_zero_zero() {
+        let content = "alpha <!--- x ---> beta";
+        let result = resolve_scope_range(content, 6, 18, &Scope::AsymWords(0, 0), "en", ResolutionMode::Backward);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn asym_words_forward_clamps_to_eof() {
+        let content = "alpha beta <!--- n: 0_5 | x ---> gamma delta";
+        let result = resolve_scope_range(content, 11, 32, &Scope::AsymWords(0, 5), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((33, 44))); // "gamma delta" — all that's available
+    }
+
+    #[test]
+    fn asym_words_no_text_after() {
+        let content = "alpha beta <!--- n: 1_1 | x --->";
+        let result = resolve_scope_range(content, 11, 32, &Scope::AsymWords(1, 1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((6, 10))); // backward "beta" only; forward side empty
+    }
+
+    // ── Asymmetric paragraphs ──
+
+    #[test]
+    fn asym_paragraph_spec_example() {
+        // Spec: `2\p1` targets A and B above, plus one paragraph below
+        let content = "Paragraph A.\n\nParagraph B.\n\n<!--- n: 2\\p1 | x --->\n\nParagraph C.\n\nParagraph D.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 2\\p1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymParagraph(2, 1), "en", ResolutionMode::Backward);
+        let c_end = content.find("Paragraph C.").unwrap() + "Paragraph C.".len();
+        assert_eq!(result, Some((0, c_end)));
+    }
+
+    #[test]
+    fn asym_paragraph_forward_only() {
+        let content = "Paragraph A.\n\n<!--- n: 0\\p2 | x --->\n\nParagraph C.\n\nParagraph D.\n\nParagraph E.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\p2 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymParagraph(0, 2), "en", ResolutionMode::Backward);
+        let c_start = content.find("Paragraph C.").unwrap();
+        let d_end = content.find("Paragraph D.").unwrap() + "Paragraph D.".len();
+        assert_eq!(result, Some((c_start, d_end)));
+    }
+
+    #[test]
+    fn asym_paragraph_backward_only() {
+        let content = "Paragraph A.\n\nParagraph B.\n\n<!--- n: 2\\p0 | x --->\n\nParagraph C.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 2\\p0 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymParagraph(2, 0), "en", ResolutionMode::Backward);
+        let b_end = content.find("Paragraph B.").unwrap() + "Paragraph B.".len();
+        assert_eq!(result, Some((0, b_end)));
+    }
+
+    #[test]
+    fn asym_paragraph_forward_clamps_to_eof() {
+        let content = "A.\n\n<!--- n: 0\\p9 | x --->\n\nOnly one after.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\p9 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymParagraph(0, 9), "en", ResolutionMode::Backward);
+        let start = content.find("Only one after.").unwrap();
+        assert_eq!(result, Some((start, content.len())));
+    }
+
+    #[test]
+    fn asym_paragraph_mid_paragraph_forward_rest() {
+        // Annotation mid-paragraph: forward 1 = rest of the current paragraph
+        let content = "Before text <!--- n: 0\\p1 | x ---> rest of paragraph.\n\nNext para.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\p1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymParagraph(0, 1), "en", ResolutionMode::Backward);
+        let start = content.find("rest of").unwrap();
+        let end = content.find("rest of paragraph.").unwrap() + "rest of paragraph.".len();
+        assert_eq!(result, Some((start, end)));
+    }
+
+    // ── Asymmetric pages ──
+
+    #[test]
+    fn asym_page_before_and_after() {
+        let content = "One.\x0CTwo.<!--- n: 1\\f1 | x ---> more.\x0CThree.\x0CFour.";
+        let ann = 9;
+        let ann_end = ann + "<!--- n: 1\\f1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(1, 1), "en", ResolutionMode::Backward);
+        // backward: "Two." (5..9); forward: " more." to the next form feed
+        let fwd_end = content.find(" more.").unwrap() + " more.".len();
+        assert_eq!(result, Some((5, fwd_end)));
+    }
+
+    #[test]
+    fn asym_page_forward_two() {
+        let content = "One.\x0CTwo.<!--- n: 0\\f2 | x ---> more.\x0CThree.\x0CFour.";
+        let ann = 9;
+        let ann_end = ann + "<!--- n: 0\\f2 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(0, 2), "en", ResolutionMode::Backward);
+        let start = content.find("more.").unwrap();
+        let end = content.find("Three.").unwrap() + "Three.".len();
+        assert_eq!(result, Some((start, end)));
+    }
+
+    #[test]
+    fn asym_page_spec_backward_only() {
+        // Spec: `2\f0` — 2 pages before, 0 after
+        let content = "One.\x0CTwo.<!--- n: 2\\f0 | x --->\x0CThree.";
+        let ann = 9;
+        let ann_end = ann + "<!--- n: 2\\f0 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(2, 0), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, 9))); // "One.\x0CTwo."
+    }
+
+    // ── Asymmetric sentences ──
+
+    #[test]
+    fn asym_sentence_before_and_after() {
+        let content = "First one. Second two. <!--- n: 1\\s1 | x ---> Third three. Fourth four.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 1\\s1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(1, 1), "en", ResolutionMode::Backward);
+        let back_start = content.find("Second two.").unwrap();
+        let fwd_end = content.find("Third three.").unwrap() + "Third three.".len();
+        assert_eq!(result, Some((back_start, fwd_end)));
+    }
+
+    #[test]
+    fn asym_sentence_spec_forward_only() {
+        // Spec: `0\s2` — 0 sentences before, 2 after (forward only)
+        let content = "First one. Second two. <!--- n: 0\\s2 | x ---> Third three. Fourth four.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s2 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 2), "en", ResolutionMode::Backward);
+        let start = content.find("Third three.").unwrap();
+        assert_eq!(result, Some((start, content.len())));
+    }
+
+    #[test]
+    fn asym_sentence_forward_clamps_to_paragraph() {
+        let content = "A one. <!--- n: 0\\s5 | x ---> B two. C three.\n\nNew paragraph sentence.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s5 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 5), "en", ResolutionMode::Backward);
+        let start = content.find("B two.").unwrap();
+        let end = content.find("C three.").unwrap() + "C three.".len();
+        assert_eq!(result, Some((start, end)));
+    }
+
+    #[test]
+    fn asym_sentence_forward_double_spaces() {
+        // The sentenza whitespace pitfall applies to forward resolution too
+        let content = "Intro. <!--- n: 0\\s1 | x ---> Forward  has  double  spaces. Tail.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 1), "en", ResolutionMode::Backward);
+        let start = content.find("Forward").unwrap();
+        let end = content.find("spaces.").unwrap() + "spaces.".len();
+        assert_eq!(result, Some((start, end)));
     }
 
     // ── Sentence scope with whitespace normalization ──
@@ -487,7 +1159,7 @@ mod tests {
         // collapses \s{2,} to a single space during preprocessing.
         let content = "Maximum depth  $d = 5$  and composition.<!-- n: | note -->";
         let ann_start = content.find("<!--").unwrap();
-        let result = resolve_scope_range(content, ann_start, &Scope::Sentence(1), "en");
+        let result = resolve_scope_range(content, ann_start, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
         assert!(result.is_some(), "scope should resolve despite double spaces");
         let (start, end) = result.unwrap();
         assert_eq!(start, 0);
@@ -498,7 +1170,7 @@ mod tests {
     fn sentence_double_spaces_multi_sentence() {
         let content = "First sentence. Second  has  double  spaces.<!-- n: | note -->";
         let ann_start = content.find("<!--").unwrap();
-        let result = resolve_scope_range(content, ann_start, &Scope::Sentence(1), "en");
+        let result = resolve_scope_range(content, ann_start, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
         assert!(result.is_some());
         let (start, end) = result.unwrap();
         // Should highlight only the second sentence (with its original double spaces)

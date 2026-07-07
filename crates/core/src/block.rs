@@ -245,6 +245,34 @@ mod tests {
     }
 
     #[test]
+    fn block_section_scope() {
+        let inner = "n\n\\h\n---\nSection note.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Section);
+    }
+
+    #[test]
+    fn block_document_scope() {
+        let inner = "llm\n\\d\n---\nSummarize.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::Document);
+    }
+
+    #[test]
+    fn block_asym_paragraph_scope() {
+        let inner = "n\n2\\p1\n---\nAsymmetric.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::AsymParagraph(2, 1));
+    }
+
+    #[test]
+    fn block_asym_words_scope() {
+        let inner = "n\n3_1\n---\nAsymmetric words.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.scope, Scope::AsymWords(3, 1));
+    }
+
+    #[test]
     fn block_thread_type() {
         let inner = "th\n---\nA conversational thread.";
         let ann = parse_block(inner);

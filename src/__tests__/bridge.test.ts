@@ -140,6 +140,29 @@ describe("Annotation JSON deserialization", () => {
         expect(json.id).toBe("t1");
     });
 
+    it("handles section and document scopes", () => {
+        const section: Annotation["scope"] = { kind: "section" };
+        const document: Annotation["scope"] = { kind: "document" };
+        expect(section.kind).toBe("section");
+        expect(document.kind).toBe("document");
+    });
+
+    it("handles asymmetric scopes", () => {
+        const scopes: Annotation["scope"][] = [
+            { kind: "asym_words", value: [3, 1] },
+            { kind: "asym_sentence", value: [0, 2] },
+            { kind: "asym_paragraph", value: [2, 1] },
+            { kind: "asym_page", value: [2, 0] },
+        ];
+        expect(scopes[0].kind).toBe("asym_words");
+        if (scopes[0].kind === "asym_words") {
+            expect(scopes[0].value).toEqual([3, 1]);
+        }
+        if (scopes[1].kind === "asym_sentence") {
+            expect(scopes[1].value).toEqual([0, 2]);
+        }
+    });
+
     it("handles all scope types", () => {
         const scopes: Annotation["scope"][] = [
             { kind: "words", value: 3 },
