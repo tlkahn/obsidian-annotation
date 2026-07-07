@@ -22,16 +22,15 @@ pub fn parse_compact(inner: &str) -> Annotation {
 
 /// Whether the inner text has detectable annotation structure (type keyword,
 /// certainty mark, scope token, anchor, pipe, date) or is block form.
-/// Plain prose comments return false.
+/// Plain prose comments return false. An ID alone is not structure: a bare
+/// [word] prefix is common in plain prose comments, and the migrate tool
+/// must not rewrite those.
 pub fn is_structured_annotation(inner: &str) -> bool {
-    // An ID alone is not structure: a bare [word] prefix is common in plain
-    // prose comments, and the migrate tool must not rewrite those.
-    let (_, remainder) = crate::id::extract_id(inner);
-    crate::block::is_block_form(remainder) || parse_compact_inner(remainder).1
+    crate::parser::classify(inner).2
 }
 
 /// Parse the compact form, also returning whether any structure was detected.
-fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
+pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
     let mut remaining = inner;
     let mut annotation_type = AnnotationType::Bare;
     let mut certainty = Certainty::Neutral;

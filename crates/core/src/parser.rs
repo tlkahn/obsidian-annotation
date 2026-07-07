@@ -1,8 +1,22 @@
 use crate::types::Annotation;
 use crate::scanner::scan_comments;
-use crate::compact::parse_compact;
+use crate::compact::parse_compact_inner;
 use crate::block::{is_block_form, parse_block};
 use crate::id::extract_id;
+
+/// Classify a comment's inner text: extract the optional leading ID, parse
+/// the remainder in block or compact form, and report whether it has
+/// detectable structure. Single entry point shared by `parse_annotations`
+/// and `is_structured_annotation` so the two can't diverge.
+pub(crate) fn classify(inner: &str) -> (Option<String>, Annotation, bool) {
+    let (id, rest) = extract_id(inner);
+    if is_block_form(rest) {
+        (id, parse_block(rest), true)
+    } else {
+        let (ann, structured) = parse_compact_inner(rest);
+        (id, ann, structured)
+    }
+}
 
 /// Parse all annotation comments in a document.
 /// Returns annotations ordered by their position in the document.
@@ -11,12 +25,7 @@ pub fn parse_annotations(content: &str) -> Vec<Annotation> {
     let mut annotations = Vec::with_capacity(raw_comments.len());
 
     for rc in raw_comments {
-        let (id, inner) = extract_id(&rc.inner);
-        let mut ann = if is_block_form(inner) {
-            parse_block(inner)
-        } else {
-            parse_compact(inner)
-        };
+        let (id, mut ann, _) = classify(&rc.inner);
 
         // Fill in position, id, and original text from scanner
         ann.id = id;
