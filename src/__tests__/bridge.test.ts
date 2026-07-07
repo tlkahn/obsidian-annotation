@@ -14,8 +14,8 @@ describe("Annotation JSON deserialization", () => {
             body: "same sense as TĀ 3.68?",
             date: "2026-03",
             char_start: 19,
-            char_end: 65,
-            original: "<!-- n? __ | same sense as TĀ 3.68? @2026-03 -->",
+            char_end: 69,
+            original: "<!--- n? __ | same sense as TĀ 3.68? @2026-03 --->",
         };
 
         expect(json.annotation_type).toBe("note");
@@ -38,7 +38,7 @@ describe("Annotation JSON deserialization", () => {
             date: "2026-03",
             char_start: 0,
             char_end: 100,
-            original: "<!-- ... -->",
+            original: "<!--- ... --->",
         };
 
         expect(json.form).toBe("block");
@@ -59,7 +59,7 @@ describe("Annotation JSON deserialization", () => {
             date: null,
             char_start: 4,
             char_end: 40,
-            original: "<!-- compare Vasugupta SpK 1.1 -->",
+            original: "<!--- compare Vasugupta SpK 1.1 --->",
         };
 
         expect(json.annotation_type).toBe("bare");
@@ -76,8 +76,8 @@ describe("Annotation JSON deserialization", () => {
             body: "variant reading in ms. B",
             date: null,
             char_start: 0,
-            char_end: 50,
-            original: "<!-- app: | variant reading in ms. B -->",
+            char_end: 42,
+            original: "<!--- app: | variant reading in ms. B --->",
         };
 
         expect(json.annotation_type).toBe("apparatus");

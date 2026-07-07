@@ -243,6 +243,18 @@ mod tests {
         assert_eq!(ann.scope, Scope::Sentence(2));
     }
 
+    #[test]
+    fn body_line_of_dashes_is_body() {
+        // The scanner strips the ---> closer before block parsing, so dash runs
+        // inside the body never collide with the --- head/body separator.
+        let inner = "cf\n---\nsee ---->\n----";
+        let ann = parse_block(inner);
+        assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
+        let body = ann.body.unwrap();
+        assert!(body.contains("---->"));
+        assert!(body.contains("----"));
+    }
+
     // is_block_form detection
 
     #[test]

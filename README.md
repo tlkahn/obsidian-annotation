@@ -1,6 +1,6 @@
 # Obsidian Annotation
 
-An Obsidian plugin that renders HTML comment annotations as styled widgets in edit mode. Designed for scholarly work -- textual notes, cross-references, critical apparatus, translation remarks, and open questions sit inline with your text without cluttering the reading view.
+An Obsidian plugin that renders triple-dash HTML comment annotations (`<!--- --->`) as styled widgets in edit mode. Designed for scholarly work -- textual notes, cross-references, critical apparatus, translation remarks, and open questions sit inline with your text without cluttering the reading view.
 
 HTML comments are naturally hidden in Obsidian's reading/preview mode. This plugin makes them visible and useful while editing.
 
@@ -24,39 +24,39 @@ Place your cursor on any widget to expand it back to the raw HTML comment for ed
 
 ## Annotation syntax
 
-Annotations are written as standard HTML comments. Any `<!-- -->` comment in your note is treated as an annotation.
+Annotations are written as triple-dash HTML comments: `<!--- ... --->`. Standard `<!-- -->` comments are ignored and remain ordinary, invisible comments.
 
 ### Compact form (inline)
 
 ```
-<!-- TYPE CERTAINTY SCOPE | BODY @DATE -->
+<!--- TYPE CERTAINTY SCOPE | BODY @DATE --->
 ```
 
 All fields are optional. Some examples:
 
 | Example | Meaning |
 |---------|---------|
-| `<!-- n? __ \| same sense as TA 3.68? @2026-03 -->` | Note, tentative, applies to 2 preceding words |
-| `<!-- todo! \| verify this claim -->` | Todo, important |
-| `<!-- cf \pp -->` | Cross-reference, applies to current + preceding paragraph |
-| `<!-- tr: _ \| tentative rendering @2026-03 -->` | Translation remark on preceding word |
-| `<!-- app: \| ms. B reads *prakasa* instead of *vimarsa* -->` | Critical apparatus entry |
-| `<!-- q? ^"8th century" \| Sanderson says 9th c. -->` | Question anchored to specific text |
-| `<!-- just a plain comment -->` | Bare annotation (shown as gray pill) |
+| `<!--- n? __ \| same sense as TA 3.68? @2026-03 --->` | Note, tentative, applies to 2 preceding words |
+| `<!--- todo! \| verify this claim --->` | Todo, important |
+| `<!--- cf \pp --->` | Cross-reference, applies to current + preceding paragraph |
+| `<!--- tr: _ \| tentative rendering @2026-03 --->` | Translation remark on preceding word |
+| `<!--- app: \| ms. B reads *prakasa* instead of *vimarsa* --->` | Critical apparatus entry |
+| `<!--- q? ^"8th century" \| Sanderson says 9th c. --->` | Question anchored to specific text |
+| `<!--- just a plain comment --->` | Bare annotation (shown as gray pill) |
 
 ### Block form (multi-line)
 
 For longer annotations, use a `---` separator between the header and body:
 
 ```html
-<!--
+<!---
 n!
 \p
 @2026-03-28
 ---
 Lambert's framing maps closely to Tainter's
 complexity brake. See also [[collapse models]].
--->
+--->
 ```
 
 The body supports full Markdown: `*italic*`, `[[wikilinks]]`, `[links](url)`, lists, etc.
@@ -102,18 +102,23 @@ Scope indicates how much surrounding text the annotation applies to.
 Append `@YYYY-MM` or `@YYYY-MM-DD` at the end of the body:
 
 ```
-<!-- n: | this seems wrong @2026-03-28 -->
+<!--- n: | this seems wrong @2026-03-28 --->
 ```
 
 ### Opting out
 
-Prefix with `raw:` to keep a comment invisible to the plugin:
+Standard HTML comments are the opt-out: any `<!-- -->` comment is invisible to the plugin. Only triple-dash `<!--- --->` comments are treated as annotations. Annotation comments inside fenced code blocks are also ignored.
 
-```
-<!-- raw: this comment is ignored by the annotation plugin -->
+### Migrating existing annotations
+
+If your vault contains annotations written with the old standard-comment delimiters, a migration CLI converts them in place:
+
+```bash
+cargo run -p annotation-core --bin migrate -- /path/to/vault --dry-run   # report what would change
+cargo run -p annotation-core --bin migrate -- /path/to/vault             # rewrite files
 ```
 
-Comments inside fenced code blocks are also ignored.
+Only comments with detectable annotation structure (type keyword, certainty mark, scope token, anchor, `|` pipe, `@date`, or block form) are converted to `<!--- --->`. Plain prose comments like `<!-- fix this later -->` and `<!-- raw: ... -->` comments are left untouched and simply stop rendering. The tool skips hidden directories (e.g. `.obsidian`), fenced code blocks, and is safe to run repeatedly (idempotent). Use `--ext` to migrate a different file extension (default `md`).
 
 ## Display modes
 
@@ -127,7 +132,7 @@ Block annotations always render as foldable callouts regardless of the display m
 
 ## Interaction
 
-- **Cursor near annotation**: The widget disappears and the raw `<!-- -->` comment is shown, so you can edit it directly
+- **Cursor near annotation**: The widget disappears and the raw `<!--- --->` comment is shown, so you can edit it directly
 - **Press ESC**: When the cursor is inside an annotation's raw source, pressing ESC exits edit mode and re-renders the widget. Also available as the command "Exit annotation edit mode" in the command palette (rebindable in Obsidian's Hotkeys settings)
 - **Click widget body**: Places the cursor at the annotation, expanding it for editing
 - **Click fold toggle** (block callouts): Collapses/expands the body

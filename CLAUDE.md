@@ -1,6 +1,6 @@
 # Obsidian Annotation Plugin
 
-Desktop-only Obsidian plugin that renders HTML comment annotations (`<!-- -->`) as styled widgets in edit mode (CM6). Rust core compiled to WASM handles parsing; TypeScript handles UI.
+Desktop-only Obsidian plugin that renders triple-dash HTML comment annotations (`<!--- --->`) as styled widgets in edit mode (CM6). Standard `<!-- -->` comments are ignored. Rust core compiled to WASM handles parsing; TypeScript handles UI.
 
 ## Quick orientation
 
@@ -21,7 +21,7 @@ install.sh           Build + install to Obsidian vault
 - **Block annotations** always render as foldable callouts
 - **Scope hover highlight**: hovering a pill/marker highlights the scoped text (preceding N words, sentence, paragraph, page, or anchor match)
 - **ESC to exit edit mode**: pressing ESC when cursor is inside an annotation moves cursor out, re-rendering the widget
-- **`raw:`** prefix opts a comment out of annotation rendering
+- **Standard `<!-- -->` comments are the opt-out**: only `<!--- --->` renders as an annotation
 - UTF-16 offsets throughout (CM6/JS compatibility)
 
 ## Build commands
@@ -35,6 +35,7 @@ npm run test           # all tests (Rust + TS)
 cargo test -p annotation-core   # Rust unit tests
 npx vitest run         # TS tests
 ./install.sh [vault]   # build + install to vault (default: ~/Documents/Ekuro)
+cargo run -p annotation-core --bin migrate -- <vault> [--dry-run] [--ext md]   # migrate legacy <!-- --> annotations to <!--- --->
 ```
 
 ## Architecture patterns
@@ -52,26 +53,26 @@ npx vitest run         # TS tests
 ## DSL reference (compact form)
 
 ```
-<!-- TYPE CERTAINTY SCOPE | BODY @DATE -->
+<!--- TYPE CERTAINTY SCOPE | BODY @DATE --->
 ```
 
 Examples:
-- `<!-- n? __ | same sense as TA 3.68? @2026-03 -->`
-- `<!-- todo! ^"8th century" | verify date -->`
-- `<!-- cf \pp -->`
-- `<!-- tr: _ | tentative rendering @2026-03 -->`
-- `<!-- just a bare comment -->`
+- `<!--- n? __ | same sense as TA 3.68? @2026-03 --->`
+- `<!--- todo! ^"8th century" | verify date --->`
+- `<!--- cf \pp --->`
+- `<!--- tr: _ | tentative rendering @2026-03 --->`
+- `<!--- just a bare comment --->`
 
 ## DSL reference (block form)
 
 ```html
-<!--
+<!---
 TYPE CERTAINTY
 SCOPE
 @DATE
 ---
 Markdown body
--->
+--->
 ```
 
 ## Files that matter most
