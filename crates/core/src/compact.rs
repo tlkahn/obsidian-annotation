@@ -30,18 +30,23 @@ pub fn is_structured_annotation(inner: &str) -> bool {
     crate::parser::classify(inner, &[]).2
 }
 
-/// Whether the text after a candidate mark code is header material:
-/// certainty, pipe, end of comment, or (after whitespace) a scope token,
-/// anchor, or pipe. Prose (e.g. "it is raining") is none of these.
+/// Whether the text after a candidate mark code is header material: a
+/// certainty char (itself followed by header material), pipe, end of
+/// comment, or (after whitespace) a scope token, anchor, date, or pipe.
+/// Prose (e.g. "it is raining", "hi! everyone") is none of these.
 fn mark_followed_by_header(after: &str) -> bool {
     match after.chars().next() {
         None => true,
-        Some('?') | Some('!') | Some(':') | Some('|') => true,
+        // A certainty char only counts when what follows it is also header
+        // material — "hi! everyone" is prose, "sic? _" is a mark
+        Some('?') | Some('!') | Some(':') => mark_followed_by_header(&after[1..]),
+        Some('|') => true,
         Some(c) if c.is_whitespace() => {
             let t = after.trim_start();
             t.is_empty()
                 || t.starts_with('|')
                 || t.starts_with("^\"")
+                || (t.starts_with('@') && DATE_RE.is_match(t))
                 || SCOPE_RE.is_match(t)
                 || (t.starts_with('_') && t.chars().all(|c| c == '_'))
                 || Scope::try_parse(t).is_some()
@@ -626,6 +631,48 @@ mod tests {
             assert_eq!(ann.mark, None);
             assert_eq!(ann.body, Some(inner.to_string()));
         }
+    }
+
+    #[test]
+    fn mark_certainty_followed_by_prose_stays_bare() {
+        // Punctuation must not bypass the prose guard
+        for inner in [
+            "hi! everyone remember this",
+            "it? not sure about this",
+            "st: 21",
+            "em: use a dash here",
+        ] {
+            let ann = parse_compact(inner);
+            assert_eq!(ann.annotation_type, AnnotationType::Bare, "inner {inner}");
+            assert_eq!(ann.mark, None);
+            assert_eq!(ann.body, Some(inner.to_string()));
+        }
+    }
+
+    #[test]
+    fn mark_certainty_with_header_is_mark() {
+        let ann = parse_compact("sic? _");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+
+        let ann = parse_compact("hi! | body note");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.certainty, Certainty::Firm);
+        assert_eq!(ann.body, Some("body note".to_string()));
+
+        let ann = parse_compact("sic?");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.certainty, Certainty::Tentative);
+    }
+
+    #[test]
+    fn mark_followed_by_date_is_mark() {
+        let ann = parse_compact("hi @2026-03");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("hi".to_string()));
+        assert_eq!(ann.date, Some("2026-03".to_string()));
+        // But a bare @ mention is still prose
+        let ann = parse_compact("hi @alice please review");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
     }
 
     #[test]
