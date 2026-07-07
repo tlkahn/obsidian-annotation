@@ -326,3 +326,14 @@
 .annotation-mark-interp::after {
     content: "\27E7"; /* ⟧ */
 }
+
+/* ============================================================
+   G. Annotation ID badges
+   ============================================================ */
+.annotation-callout-id,
+.annotation-panel-entry-id {
+    color: var(--text-faint);
+    font-size: 0.8em;
+    font-family: var(--font-monospace);
+    margin-left: 6px;
+}

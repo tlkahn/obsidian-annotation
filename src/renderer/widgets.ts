@@ -89,6 +89,12 @@ export class CalloutWidget extends WidgetType {
             titleText.addClass("annotation-certainty-firm");
         }
 
+        // ID badge (right side of header)
+        if (this.annotation.id) {
+            const idEl = header.createSpan({ cls: "annotation-callout-id" });
+            idEl.textContent = `[${this.annotation.id}]`;
+        }
+
         // Date (right side of header)
         if (this.annotation.date) {
             const dateEl = header.createSpan({ cls: "annotation-callout-date" });
@@ -165,6 +171,11 @@ export class PillWidget extends WidgetType {
         const wrapper = document.createElement("span");
         wrapper.className = `annotation-pill annotation-pill-${this.annotation.annotation_type}`;
         wrapper.style.setProperty("--callout-color", info.color);
+
+        // Surface the annotation ID as a tooltip
+        if (this.annotation.id) {
+            wrapper.setAttribute("title", `[${this.annotation.id}]`);
+        }
 
         // Certainty mark
         if (this.annotation.certainty === "tentative") {
