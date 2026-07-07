@@ -29,7 +29,7 @@ Annotations are written as triple-dash HTML comments: `<!--- ... --->`. Standard
 ### Compact form (inline)
 
 ```
-<!--- TYPE CERTAINTY SCOPE | BODY @DATE --->
+<!---[ID] TYPE-OR-MARK CERTAINTY SCOPE ^"ANCHOR" | BODY @DATE --->
 ```
 
 All fields are optional. Some examples:
@@ -42,6 +42,11 @@ All fields are optional. Some examples:
 | `<!--- tr: _ \| tentative rendering @2026-03 --->` | Translation remark on preceding word |
 | `<!--- app: \| ms. B reads *prakasa* instead of *vimarsa* --->` | Critical apparatus entry |
 | `<!--- q? ^"8th century" \| Sanderson says 9th c. --->` | Question anchored to specific text |
+| `<!---[my-id] n: \p \| body text --->` | Note with a stable annotation ID |
+| `<!--- llm \d \| summarize entire document --->` | LLM content, whole-document scope |
+| `<!--- th? \| is this Jayaratha? --->` | Conversational thread on the passage |
+| `<!--- n: 2\p1 \| context --->` | Note on 2 paragraphs before + 1 after |
+| `<!--- hi __ --->` | Highlight mark on 2 preceding words (no widget) |
 | `<!--- just a plain comment --->` | Bare annotation (shown as gray pill) |
 
 ### Block form (multi-line)
@@ -61,6 +66,16 @@ complexity brake. See also [[collapse models]].
 
 The body supports full Markdown: `*italic*`, `[[wikilinks]]`, `[links](url)`, lists, etc.
 
+### Annotation IDs
+
+An optional ID in square brackets can be placed immediately after the opening delimiter, in both forms, so external systems can reference an annotation stably:
+
+```
+<!---[my-note-id] n: \p | body text --->
+```
+
+Valid ID characters: letters, digits, hyphens, underscores, and dots; the first character must be alphanumeric. An invalid ID is not an error - the bracketed text simply stays part of the body, and markdown links like `[text](url)` are never treated as IDs. IDs appear as a tooltip on pills and markers and as a badge in callout headers and the side panel.
+
 ### Types
 
 | Keyword | Label | Color |
@@ -71,6 +86,8 @@ The body supports full Markdown: `*italic*`, `[[wikilinks]]`, `[links](url)`, li
 | `cf` | Cross-ref | Purple |
 | `app` | Apparatus | Terracotta |
 | `tr` | Translation | Teal |
+| `llm` | LLM (AI-generated or AI-directed content, render-only) | Magenta |
+| `th` | Thread (conversational note; renders as a plain callout) | Orange |
 | _(none)_ | Annotation | Gray |
 
 ### Certainty
@@ -87,15 +104,46 @@ Scope indicates how much surrounding text the annotation applies to.
 
 | Syntax | Meaning |
 |--------|---------|
-| `_` | 1 preceding word |
-| `__` | 2 preceding words |
-| `___` | 3 preceding words |
-| `\p` | Current paragraph |
-| `\pp` or `\p_` | 2 paragraphs (current + preceding) |
-| `\ppp` or `\p__` | 3 paragraphs |
-| `\f` | Current page |
-| `\ff` or `\f_` | 2 pages |
-| `^"text"` | Anchored to specific text |
+| `_` / `__` / `___` | 1 / 2 / 3 preceding words |
+| `\s` / `\ss` / `\s__` | 1 / 2 / 2 sentences (the default when no scope is given) |
+| `\p` / `\pp` / `\p__` | 1 / 2 / 2 paragraphs (current + preceding) |
+| `\f` / `\ff` / `\f__` | 1 / 2 / 2 pages (pages are separated by form-feed characters) |
+| `\h` | Current markdown section (nearest heading to the next heading of equal or higher level) |
+| `\d` | Entire document |
+| `^"text"` | Anchored to specific text (searches backward) |
+| `3_1` | Asymmetric words: 3 before, 1 after |
+| `2\s1` / `3\p1` / `2\f0` | Asymmetric sentences / paragraphs / pages (N before, M after, single digits) |
+
+When a scope requests more units than exist, it gracefully extends to the document boundary. Letter-repeat (`\pp`) and underscore-suffix (`\p__`) forms are equivalent.
+
+### Philological marks
+
+Instead of a type keyword, a mark code turns the annotation into pure text styling: the comment disappears and the scoped text is styled directly. Sixteen built-in codes:
+
+| Codes | Effect |
+|-------|--------|
+| `nb` `it` `ul` `st` `sc` | bold, italic, underline, strikethrough, small caps |
+| `hi` `em` | highlight, emphasis (underline + background) |
+| `sic` `crux` `lac` `del` | wavy red underline, †daggered†, [bracketed], faded strikethrough |
+| `sup` `conj` `dub` `gloss` `interp` | ⟨supplied⟩, conjecture, dubious, gloss, ⟦interpolation⟧ |
+
+```
+<!--- hi _ --->                          highlight 1 word
+<!--- sic? _ --->                        tentative sic
+<!--- crux \s | dagger this sentence --->
+```
+
+Type keywords win over mark codes (`n` is always a Note), and a code followed by ordinary prose stays a bare comment (`<!--- it is raining --->` is not an italic mark). A mark's body (and ID) appears as a hover tooltip on the styled text.
+
+**Custom marks**: define your own codes in `.lit/marks.toml` at the vault root. Style values are restricted to simple CSS (no URLs, quotes, or slashes):
+
+```toml
+[mymark]
+label = "my custom mark"
+[mymark.style]
+color = "purple"
+font-weight = "bold"
+```
 
 ### Date
 
@@ -118,7 +166,7 @@ cargo run -p annotation-core --bin migrate -- /path/to/vault --dry-run   # repor
 cargo run -p annotation-core --bin migrate -- /path/to/vault             # rewrite files
 ```
 
-Only comments with detectable annotation structure (type keyword, certainty mark, scope token, anchor, `|` pipe, `@date`, or block form) are converted to `<!--- --->`. Plain prose comments like `<!-- fix this later -->` and `<!-- raw: ... -->` comments are left untouched and simply stop rendering. The tool skips hidden directories (e.g. `.obsidian`), fenced code blocks, and is safe to run repeatedly (idempotent). Use `--ext` to migrate a different file extension (default `md`).
+Only comments with detectable annotation structure (type keyword, certainty mark, scope token, anchor, `|` pipe, `@date`, or block form) are converted to `<!--- --->`. Plain prose comments are deliberately left untouched, including tricky cases: `<!-- fix this later -->`, `<!-- [TODO] see below -->` (bracketed word, not an ID), `<!-- 2_4 is the ratio -->` (digit token, not an asymmetric scope), `<!-- it is raining -->` and `<!-- nb -->` (mark-code words in prose). The tool skips hidden directories (e.g. `.obsidian`), fenced code blocks, and is safe to run repeatedly (idempotent). Use `--ext` to migrate a different file extension (default `md`). The Lit spec's legacy `%%! ... %%` delimiters are not supported.
 
 ## Display modes
 
@@ -145,13 +193,17 @@ When you hover over an inline annotation (pill or marker), the plugin highlights
 
 | Scope | What gets highlighted |
 |-------|-----------------------|
-| `_` | 1 preceding word |
-| `__` | 2 preceding words |
-| `\p` | Current paragraph |
-| `\pp` | Current + preceding paragraph |
+| `_` / `__` | 1 / 2 preceding words |
+| `\s` / `\ss` | 1 / 2 preceding sentences |
+| `\p` / `\pp` | Current / current + preceding paragraph |
 | `\f` | Current page (from last form-feed) |
+| `\h` | The current heading section |
+| `\d` | The entire document (shown with a fainter tint) |
 | `^"text"` | The nearest preceding occurrence of "text" |
+| `2\p1` etc. | Asymmetric ranges before and after the annotation |
 | _(none)_ | The preceding sentence (default) |
+
+Highlights longer than ~2000 characters use a fainter tint so whole-document flashes stay subtle.
 
 The sentence boundary detection (for the default scope) uses the [sentenza](https://github.com/user/sentenza) library, a multilingual rule-based sentence splitter supporting 244+ languages.
 
