@@ -15,7 +15,8 @@ install.sh           Build + install to Obsidian vault
 ## Key concepts
 
 - **Two annotation forms**: compact (single-line, inline) and block (multi-line, `---` separator)
-- **Seven types**: `n` (note), `q` (question), `todo`, `cf` (cross-ref), `app` (apparatus), `tr` (translation), bare (untyped)
+- **Nine types**: `n` (note), `q` (question), `todo`, `cf` (cross-ref), `app` (apparatus), `tr` (translation), `llm` (LLM content), `th` (thread), bare (untyped)
+- **Annotation IDs**: optional `[id]` immediately after `<!---` in both forms (charset: alphanumeric first char, then letters/digits/`-`/`_`/`.`); invalid IDs fall through to body text, and markdown links `[text](url)` are never treated as IDs
 - **Scope system**: `_`/`__`/`___` (words), `\s`/`\ss`/`\sss` (sentences, default), `\p`/`\pp`/`\ppp` (paragraphs), `\f`/`\ff`/`\fff` (pages), `^"text"` (anchor). Underscore suffix equivalent: `\p__` = `\pp`
 - **Two display modes** for compact annotations: pill (inline colored chip) or footnote (superscript marker + side panel)
 - **Block annotations** always render as foldable callouts
