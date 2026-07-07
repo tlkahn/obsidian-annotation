@@ -1056,18 +1056,19 @@ mod tests {
     #[test]
     fn bidirectional_page() {
         let content = "One.\x0CTwo.<!--- x ---> more.\x0CThree.\x0CFour.";
-        let ann = 9;
+        let ann = content.find("<!---").unwrap();
         let ann_end = ann + "<!--- x --->".len();
         let bidi = resolve_scope_range(content, ann, ann_end, &Scope::Page(1), "en", ResolutionMode::Bidirectional);
-        let asym = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(1, 1), "en", ResolutionMode::Backward);
-        assert_eq!(bidi, asym);
-        assert!(bidi.is_some());
+        // backward: "Two." on the current page; forward: " more." to the next form feed
+        let back_start = content.find("Two.").unwrap();
+        let fwd_end = content.find(" more.").unwrap() + " more.".len();
+        assert_eq!(bidi, Some((back_start, fwd_end)));
     }
 
     #[test]
     fn asym_page_forward_clamps_to_eof() {
         let content = "One.\x0CTwo.<!--- n: 0\\f9 | x ---> rest of page.";
-        let ann = 9;
+        let ann = content.find("<!---").unwrap();
         let ann_end = ann + "<!--- n: 0\\f9 | x --->".len();
         let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymPage(0, 9), "en", ResolutionMode::Backward);
         let start = content.find("rest of page.").unwrap();
@@ -1078,7 +1079,7 @@ mod tests {
     fn asym_words_backward_clamps_to_doc_start() {
         // 2 words available, 9 requested — clamp to document start
         let content = "alpha beta <!--- n: 9_1 | x ---> gamma";
-        let ann = 11;
+        let ann = content.find("<!---").unwrap();
         let ann_end = ann + "<!--- n: 9_1 | x --->".len();
         let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymWords(9, 1), "en", ResolutionMode::Backward);
         let fwd_end = content.find("gamma").unwrap() + "gamma".len();
