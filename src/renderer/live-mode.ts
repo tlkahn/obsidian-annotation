@@ -68,9 +68,14 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                     if (range && range.start < range.end && range.end <= state.doc.length) {
                         entries.push({ start, end, decoration: Decoration.replace({}) });
                         const attributes: Record<string, string> = {};
-                        if (ann.body) {
-                            // A mark's note surfaces as a native tooltip
-                            attributes["title"] = ann.body;
+                        // A mark's note — and its ID, since marks render no
+                        // widget, making this the ID's only editor surface —
+                        // surfaces as a native tooltip
+                        const tooltip = [ann.id ? `[${ann.id}]` : null, ann.body]
+                            .filter(Boolean)
+                            .join(" ");
+                        if (tooltip) {
+                            attributes["title"] = tooltip;
                         }
                         entries.push({
                             start: range.start,
@@ -123,4 +128,3 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
     });
 }
 
-export { isInEditableRange } from "./editable-range";
