@@ -70,6 +70,7 @@ pub fn parse_block(inner: &str) -> Annotation {
 
     Annotation {
         form: AnnotationForm::Block,
+        id: None,
         annotation_type,
         certainty,
         scope,
@@ -241,6 +242,21 @@ mod tests {
         let inner = "n\n\\s__\n---\nTwo sentences.";
         let ann = parse_block(inner);
         assert_eq!(ann.scope, Scope::Sentence(2));
+    }
+
+    #[test]
+    fn block_thread_type() {
+        let inner = "th\n---\nA conversational thread.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.annotation_type, AnnotationType::Thread);
+    }
+
+    #[test]
+    fn block_llm_tentative() {
+        let inner = "llm?\n---\nDraft prompt.";
+        let ann = parse_block(inner);
+        assert_eq!(ann.annotation_type, AnnotationType::Llm);
+        assert_eq!(ann.certainty, Certainty::Tentative);
     }
 
     #[test]

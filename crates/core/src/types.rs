@@ -10,6 +10,8 @@ pub enum AnnotationType {
     CrossRef,
     Apparatus,
     Translation,
+    Llm,
+    Thread,
     Bare,
 }
 
@@ -22,6 +24,8 @@ impl AnnotationType {
             "cf" => Some(Self::CrossRef),
             "app" => Some(Self::Apparatus),
             "tr" => Some(Self::Translation),
+            "llm" => Some(Self::Llm),
+            "th" => Some(Self::Thread),
             _ => None,
         }
     }
@@ -116,6 +120,9 @@ pub enum AnnotationForm {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Annotation {
     pub form: AnnotationForm,
+    /// Optional `[id]` placed immediately after the opening delimiter
+    #[serde(default)]
+    pub id: Option<String>,
     pub annotation_type: AnnotationType,
     pub certainty: Certainty,
     pub scope: Scope,
@@ -162,6 +169,26 @@ mod tests {
     #[test]
     fn annotation_type_translation() {
         assert_eq!(AnnotationType::from_str("tr"), Some(AnnotationType::Translation));
+    }
+
+    #[test]
+    fn annotation_type_llm() {
+        assert_eq!(AnnotationType::from_str("llm"), Some(AnnotationType::Llm));
+    }
+
+    #[test]
+    fn annotation_type_thread() {
+        assert_eq!(AnnotationType::from_str("th"), Some(AnnotationType::Thread));
+    }
+
+    #[test]
+    fn annotation_type_llm_thread_serde() {
+        assert_eq!(serde_json::to_string(&AnnotationType::Llm).unwrap(), "\"llm\"");
+        assert_eq!(serde_json::to_string(&AnnotationType::Thread).unwrap(), "\"thread\"");
+        let llm: AnnotationType = serde_json::from_str("\"llm\"").unwrap();
+        assert_eq!(llm, AnnotationType::Llm);
+        let th: AnnotationType = serde_json::from_str("\"thread\"").unwrap();
+        assert_eq!(th, AnnotationType::Thread);
     }
 
     #[test]
@@ -298,6 +325,7 @@ mod tests {
     fn annotation_serde_roundtrip() {
         let ann = Annotation {
             form: AnnotationForm::Compact,
+            id: Some("test-id".to_string()),
             annotation_type: AnnotationType::Note,
             certainty: Certainty::Tentative,
             scope: Scope::Words(2),
