@@ -337,3 +337,12 @@
     font-family: var(--font-monospace);
     margin-left: 6px;
 }
+
+/* Fainter tint for very large scope highlights (document / big sections) */
+.annotation-scope-highlight-large {
+    background-color: rgba(255, 220, 100, 0.10);
+}
+
+.theme-dark .annotation-scope-highlight-large {
+    background-color: rgba(255, 220, 100, 0.07);
+}
