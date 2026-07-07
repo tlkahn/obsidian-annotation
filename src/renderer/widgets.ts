@@ -14,6 +14,7 @@ const TYPE_INFO: Record<string, { label: string; color: string }> = {
     translation:{ label: "Translation", color: "100, 180, 160" },
     llm:        { label: "LLM",         color: "214, 93, 177" },
     thread:     { label: "Thread",      color: "240, 130, 40" },
+    mark:       { label: "Mark",        color: "150, 140, 120" },
     bare:       { label: "Annotation",  color: "136, 136, 136" },
 };
 

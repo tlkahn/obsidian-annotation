@@ -29,6 +29,9 @@ export default class AnnotationPlugin extends Plugin {
             return;
         }
 
+        // Custom philological marks from .lit/marks.toml (vault root)
+        await this.loadCustomMarks();
+
         // Live editing-mode renderer
         this.registerEditorExtension(createLiveModeExtension(this));
         this.registerEditorExtension(createEscapeAnnotationExtension(this));
@@ -79,7 +82,81 @@ export default class AnnotationPlugin extends Plugin {
     }
 
     onunload() {
+        for (const el of this.customMarkStyleEls) {
+            el.remove();
+        }
+        this.customMarkStyleEls = [];
         console.log("[Annotation] Plugin unloaded.");
+    }
+
+    private customMarkCss = "";
+    private customMarkStyleEls: HTMLStyleElement[] = [];
+
+    /** Inject the custom mark CSS into a document (main or pop-out window). */
+    private injectCustomMarkCss(doc: Document) {
+        if (!this.customMarkCss) return;
+        const el = doc.createElement("style");
+        el.textContent = this.customMarkCss;
+        doc.head.appendChild(el);
+        this.customMarkStyleEls.push(el);
+    }
+
+    /** Load custom mark definitions from `.lit/marks.toml` (vault root),
+     *  register their codes with the parser, and inject their CSS. */
+    private async loadCustomMarks() {
+        let content: string;
+        try {
+            content = await this.app.vault.adapter.read(".lit/marks.toml");
+        } catch {
+            return; // no custom marks defined
+        }
+
+        const defs = this.bridge.parseMarksToml(content);
+        if (!defs) {
+            console.warn("[Annotation] Ignoring invalid .lit/marks.toml");
+            return;
+        }
+
+        this.bridge.customMarkCodes = Object.keys(defs);
+
+        const rules: string[] = [];
+        const rejected: string[] = [];
+        for (const [code, def] of Object.entries(defs)) {
+            const props = Object.entries(def.style)
+                // Guard against CSS injection: no braces/semicolons (rule
+                // escape), and no colons, slashes, quotes, or url(...) in
+                // values — remote loads (IP beacons) need a protocol or
+                // path, and no simple CSS value does.
+                .filter(([k, v]) => {
+                    const ok =
+                        /^[a-zA-Z-]+$/.test(k) &&
+                        !/[{};:\/\\"']/.test(v) &&
+                        !/url\s*\(/i.test(v);
+                    if (!ok) rejected.push(`${code}.${k}`);
+                    return ok;
+                })
+                .map(([k, v]) => `${k}: ${v};`)
+                .join(" ");
+            if (props) {
+                rules.push(`.annotation-mark-${code} { ${props} }`);
+            }
+        }
+        if (rejected.length > 0) {
+            console.warn(
+                `[Annotation] Rejected unsafe style properties in .lit/marks.toml: ${rejected.join(", ")}`,
+            );
+        }
+        if (rules.length > 0) {
+            this.customMarkCss = rules.join("\n");
+            this.injectCustomMarkCss(document);
+            // Pop-out windows need the CSS too
+            this.registerEvent(
+                this.app.workspace.on("window-open", (_win, window) => {
+                    this.injectCustomMarkCss(window.document);
+                }),
+            );
+        }
+        console.log(`[Annotation] Loaded ${this.bridge.customMarkCodes.length} custom mark(s)`);
     }
 
     /** Open or close the annotation side panel based on settings. */

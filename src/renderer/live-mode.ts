@@ -1,12 +1,32 @@
 import { EditorView, Decoration } from "@codemirror/view";
-import { Extension, RangeSetBuilder } from "@codemirror/state";
+import { Extension } from "@codemirror/state";
 import type AnnotationPlugin from "../main";
+import type { Annotation, ScopeRange, WasmBridge } from "../bridge";
 import { CalloutWidget, PillWidget, MarkerWidget } from "./widgets";
 
 interface DecorationEntry {
     start: number;
     end: number;
     decoration: Decoration;
+}
+
+// Mark scope resolutions are cached per document content: the decoration
+// compute reruns on every selection change (each cursor move), and without
+// a cache every mark would copy the whole document across the JS-WASM
+// boundary each time.
+let scopeCacheContent = "";
+const scopeCache = new Map<string, ScopeRange | null>();
+
+function resolveMarkScope(bridge: WasmBridge, content: string, ann: Annotation): ScopeRange | null {
+    if (content !== scopeCacheContent) {
+        scopeCache.clear();
+        scopeCacheContent = content;
+    }
+    const key = `${ann.char_start}:${ann.char_end}:${JSON.stringify(ann.scope)}`;
+    if (scopeCache.has(key)) return scopeCache.get(key) ?? null;
+    const range = bridge.resolveScopeRange(content, ann.char_start, ann.char_end, ann.scope, "en");
+    scopeCache.set(key, range);
+    return range;
 }
 
 export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
@@ -37,6 +57,32 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                 if (isInEditableRange(start, end, cursorPos, selStart, selEnd)) continue;
                 if (start < 0 || end > state.doc.length || start >= end) continue;
 
+                if (ann.annotation_type === "mark") {
+                    // Marks are display-only: hide the comment and apply
+                    // persistent styling to the resolved scope range instead
+                    // of rendering a widget. When the scope cannot be
+                    // resolved (e.g. a stale anchor), fall through to the
+                    // normal widget so the annotation stays discoverable.
+                    const range = resolveMarkScope(plugin.bridge, content, ann);
+                    if (range && range.start < range.end && range.end <= state.doc.length) {
+                        entries.push({ start, end, decoration: Decoration.replace({}) });
+                        const attributes: Record<string, string> = {};
+                        if (ann.body) {
+                            // A mark's note surfaces as a native tooltip
+                            attributes["title"] = ann.body;
+                        }
+                        entries.push({
+                            start: range.start,
+                            end: range.end,
+                            decoration: Decoration.mark({
+                                class: `annotation-mark annotation-mark-${ann.mark}`,
+                                attributes,
+                            }),
+                        });
+                        continue;
+                    }
+                }
+
                 let widget;
                 if (ann.form === "block") {
                     // Block annotations always get callout widget
@@ -62,13 +108,13 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                 });
             }
 
-            entries.sort((a, b) => a.start - b.start);
-
-            const builder = new RangeSetBuilder<Decoration>();
-            for (const entry of entries) {
-                builder.add(entry.start, entry.end, entry.decoration);
-            }
-            return builder.finish();
+            // Decoration.set(..., true) sorts by from AND startSide — mark
+            // ranges and replace ranges can share a `from`, which a plain
+            // sort-by-start + RangeSetBuilder would reject.
+            return Decoration.set(
+                entries.map((e) => e.decoration.range(e.start, e.end)),
+                true,
+            );
         } catch (e) {
             console.error("[Annotation] Live-mode decoration error:", e);
             return Decoration.none;

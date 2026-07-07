@@ -215,3 +215,114 @@
 .theme-dark .annotation-scope-highlight {
     background-color: rgba(255, 220, 100, 0.15);
 }
+
+/* ============================================================
+   F. Philological Marks — display-only text styling
+   ============================================================ */
+.annotation-mark-nb {
+    font-weight: bold;
+}
+
+.annotation-mark-it {
+    font-style: italic;
+}
+
+.annotation-mark-ul {
+    text-decoration: underline;
+}
+
+.annotation-mark-st {
+    text-decoration: line-through;
+}
+
+.annotation-mark-sc {
+    font-variant: small-caps;
+}
+
+.annotation-mark-hi {
+    background-color: rgba(255, 235, 59, 0.45);
+    border-radius: 2px;
+}
+
+.theme-dark .annotation-mark-hi {
+    background-color: rgba(255, 235, 59, 0.25);
+}
+
+.annotation-mark-em {
+    text-decoration: underline;
+    background-color: rgba(128, 128, 128, 0.12);
+    border-radius: 2px;
+}
+
+.annotation-mark-sic {
+    text-decoration: underline wavy var(--color-red, #e05252);
+    text-decoration-skip-ink: none;
+}
+
+.annotation-mark-crux {
+    opacity: 0.65;
+}
+
+.annotation-mark-crux::before,
+.annotation-mark-crux::after {
+    content: "\2020"; /* † */
+    opacity: 0.8;
+}
+
+.annotation-mark-lac {
+    text-decoration: underline dashed;
+}
+
+.annotation-mark-lac::before {
+    content: "[";
+}
+
+.annotation-mark-lac::after {
+    content: "]";
+}
+
+.annotation-mark-del {
+    text-decoration: line-through;
+    opacity: 0.55;
+}
+
+.annotation-mark-sup {
+    background-color: rgba(86, 154, 222, 0.12);
+    border-radius: 2px;
+}
+
+.annotation-mark-sup::before {
+    content: "\27E8"; /* ⟨ */
+}
+
+.annotation-mark-sup::after {
+    content: "\27E9"; /* ⟩ */
+}
+
+.annotation-mark-conj {
+    font-style: italic;
+    text-decoration: underline dashed;
+}
+
+.annotation-mark-dub {
+    text-decoration: underline dotted;
+    opacity: 0.7;
+}
+
+.annotation-mark-gloss {
+    font-size: 0.85em;
+    opacity: 0.75;
+}
+
+.annotation-mark-interp {
+    background-color: rgba(136, 136, 136, 0.15);
+    border-radius: 2px;
+}
+
+.annotation-mark-interp::before {
+    content: "\27E6"; /* ⟦ */
+}
+
+.annotation-mark-interp::after {
+    content: "\27E7"; /* ⟧ */
+}

@@ -1,11 +1,26 @@
 use wasm_bindgen::prelude::*;
+use annotation_core::marks;
 use annotation_core::parser;
 use annotation_core::types::Scope;
 use annotation_core::scope_resolver::{self, ResolutionMode};
 
+/// Parse annotations. `custom_marks_json` is a JSON array of custom mark
+/// codes (from `.lit/marks.toml`); pass "[]" when none are defined.
 #[wasm_bindgen]
-pub fn parse_annotations(content: &str) -> String {
-    serde_json::to_string(&parser::parse_annotations(content)).unwrap_or_default()
+pub fn parse_annotations(content: &str, custom_marks_json: &str) -> String {
+    let custom: Vec<String> = serde_json::from_str(custom_marks_json).unwrap_or_default();
+    serde_json::to_string(&parser::parse_annotations_with_marks(content, &custom))
+        .unwrap_or_default()
+}
+
+/// Parse a `.lit/marks.toml` document. Returns a JSON object keyed by mark
+/// code ({label, icon?, style}), or "null" for invalid TOML.
+#[wasm_bindgen]
+pub fn parse_marks_toml(input: &str) -> String {
+    match marks::parse_marks_toml(input) {
+        Some(defs) => serde_json::to_string(&defs).unwrap_or_else(|_| "null".to_string()),
+        None => "null".to_string(),
+    }
 }
 
 #[wasm_bindgen]

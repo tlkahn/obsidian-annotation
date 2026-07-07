@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { Annotation, ScopeRange } from "../bridge";
+import type { Annotation, MarkDefinition, ScopeRange } from "../bridge";
 
 // Test that the JSON structure from WASM matches the TypeScript Annotation interface.
 // These test deserialization without requiring the actual WASM binary.
@@ -9,6 +9,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "compact",
             id: null,
+            mark: null,
             annotation_type: "note",
             certainty: "tentative",
             scope: { kind: "words", value: 2 },
@@ -33,6 +34,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "block",
             id: null,
+            mark: null,
             annotation_type: "crossref",
             certainty: "neutral",
             scope: { kind: "anchor", value: "anuttara" },
@@ -55,6 +57,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "compact",
             id: null,
+            mark: null,
             annotation_type: "bare",
             certainty: "neutral",
             scope: { kind: "sentence", value: 1 },
@@ -74,6 +77,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "compact",
             id: null,
+            mark: null,
             annotation_type: "apparatus",
             certainty: "neutral",
             scope: { kind: "sentence", value: 1 },
@@ -91,6 +95,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "compact",
             id: "my-note-id",
+            mark: null,
             annotation_type: "note",
             certainty: "neutral",
             scope: { kind: "paragraph", value: 1 },
@@ -108,6 +113,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "compact",
             id: null,
+            mark: null,
             annotation_type: "llm",
             certainty: "neutral",
             scope: { kind: "sentence", value: 1 },
@@ -126,6 +132,7 @@ describe("Annotation JSON deserialization", () => {
         const json: Annotation = {
             form: "block",
             id: "t1",
+            mark: null,
             annotation_type: "thread",
             certainty: "tentative",
             scope: { kind: "sentence", value: 1 },
@@ -138,6 +145,24 @@ describe("Annotation JSON deserialization", () => {
 
         expect(json.annotation_type).toBe("thread");
         expect(json.id).toBe("t1");
+    });
+
+    it("deserializes a mark annotation from WASM JSON", () => {
+        const ann: Annotation = JSON.parse(
+            '{"form":"compact","id":null,"mark":"sic","annotation_type":"mark","certainty":"tentative","scope":{"kind":"words","value":1},"body":null,"date":null,"char_start":0,"char_end":18,"original":"<!--- sic? _ --->"}',
+        );
+        expect(ann.annotation_type).toBe("mark");
+        expect(ann.mark).toBe("sic");
+        expect(ann.certainty).toBe("tentative");
+    });
+
+    it("deserializes custom mark definitions from WASM JSON", () => {
+        const defs: Record<string, MarkDefinition> = JSON.parse(
+            '{"mymark":{"label":"my custom mark","icon":"M","style":{"color":"purple","font-weight":"bold"}}}',
+        );
+        expect(defs["mymark"].label).toBe("my custom mark");
+        expect(defs["mymark"].icon).toBe("M");
+        expect(defs["mymark"].style["color"]).toBe("purple");
     });
 
     // Fixture JSON strings mirror the Rust serde output exactly (see the

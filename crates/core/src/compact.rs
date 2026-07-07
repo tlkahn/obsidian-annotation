@@ -17,22 +17,49 @@ static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Parse a compact form annotation from the inner text of an annotation comment.
 /// Returns the parsed annotation (with char_start/char_end/original zeroed — caller fills those in).
 pub fn parse_compact(inner: &str) -> Annotation {
-    parse_compact_inner(inner).0
+    parse_compact_inner(inner, &[]).0
 }
 
 /// Whether the inner text has detectable annotation structure (type keyword,
 /// certainty mark, scope token, anchor, pipe, date) or is block form.
 /// Plain prose comments return false. An ID alone is not structure: a bare
 /// [word] prefix is common in plain prose comments, and the migrate tool
-/// must not rewrite those.
+/// must not rewrite those. (Custom mark codes are not consulted here — the
+/// migrate tool only recognizes built-in structure.)
 pub fn is_structured_annotation(inner: &str) -> bool {
-    crate::parser::classify(inner).2
+    crate::parser::classify(inner, &[]).2
+}
+
+/// Whether the text after a candidate mark code is header material: a
+/// certainty char (itself followed by header material), pipe, end of
+/// comment, or (after whitespace) a scope token, anchor, date, or pipe.
+/// Prose (e.g. "it is raining", "hi! everyone") is none of these.
+fn mark_followed_by_header(after: &str) -> bool {
+    match after.chars().next() {
+        None => true,
+        // A certainty char only counts when what follows it is also header
+        // material — "hi! everyone" is prose, "sic? _" is a mark
+        Some('?') | Some('!') | Some(':') => mark_followed_by_header(&after[1..]),
+        Some('|') => true,
+        Some(c) if c.is_whitespace() => {
+            let t = after.trim_start();
+            t.is_empty()
+                || t.starts_with('|')
+                || t.starts_with("^\"")
+                || (t.starts_with('@') && DATE_RE.is_match(t))
+                || SCOPE_RE.is_match(t)
+                || (t.starts_with('_') && t.chars().all(|c| c == '_'))
+                || Scope::try_parse(t).is_some()
+        }
+        _ => false,
+    }
 }
 
 /// Parse the compact form, also returning whether any structure was detected.
-pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
+pub(crate) fn parse_compact_inner(inner: &str, custom_marks: &[String]) -> (Annotation, bool) {
     let mut remaining = inner;
     let mut annotation_type = AnnotationType::Bare;
+    let mut mark: Option<String> = None;
     let mut certainty = Certainty::Neutral;
     let mut scope = Scope::Sentence(1);
     let mut is_structured = false;
@@ -56,6 +83,31 @@ pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
                     remaining = after;
                     is_structured = true;
                     break;
+                }
+            }
+        }
+    }
+
+    // Step 1.5: Try a philological mark code in the type slot (type keywords
+    // take precedence). Several codes are common English words (it, hi, em,
+    // st), so a code only counts as a mark when what follows is header
+    // material — certainty, scope, anchor, pipe, or end of comment.
+    if annotation_type == AnnotationType::Bare {
+        let token: String = remaining
+            .chars()
+            .take_while(|c| c.is_ascii_lowercase())
+            .collect();
+        if is_builtin_mark(&token) || custom_marks.iter().any(|m| m == &token) {
+            let after = &remaining[token.len()..];
+            if mark_followed_by_header(after) {
+                annotation_type = AnnotationType::Mark;
+                mark = Some(token);
+                remaining = after;
+                // A lone code is NOT structure: the migrate tool must not
+                // rewrite plain one-word legacy comments like <!-- nb -->.
+                // It still parses as a Mark for triple-dash rendering.
+                if !after.is_empty() {
+                    is_structured = true;
                 }
             }
         }
@@ -149,12 +201,13 @@ pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
         Some(body_clean.to_string())
     };
 
-    if !is_structured {
+    if !is_structured && mark.is_none() {
         // Nothing structured found — treat entire inner text as bare body
         return (
             Annotation {
                 form: AnnotationForm::Compact,
                 id: None,
+                mark: None,
                 annotation_type: AnnotationType::Bare,
                 certainty: Certainty::Neutral,
                 scope: Scope::Sentence(1),
@@ -172,6 +225,7 @@ pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
         Annotation {
             form: AnnotationForm::Compact,
             id: None,
+            mark,
             annotation_type,
             certainty,
             scope,
@@ -181,7 +235,7 @@ pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
             char_end: 0,
             original: String::new(),
         },
-        true,
+        is_structured,
     )
 }
 
@@ -496,6 +550,173 @@ mod tests {
     fn unstructured_digit_leading_prose() {
         assert!(!is_structured_annotation("2_4 is the ratio"));
         assert!(is_structured_annotation("2_4 | x"));
+    }
+
+    // Philological marks
+
+    #[test]
+    fn mark_highlight_one_word() {
+        let ann = parse_compact("hi _");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("hi".to_string()));
+        assert_eq!(ann.scope, Scope::Words(1));
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn mark_tentative_sic() {
+        let ann = parse_compact("sic? _");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("sic".to_string()));
+        assert_eq!(ann.certainty, Certainty::Tentative);
+        assert_eq!(ann.scope, Scope::Words(1));
+    }
+
+    #[test]
+    fn mark_crux_with_body() {
+        let ann = parse_compact("crux | dagger passage");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("crux".to_string()));
+        assert_eq!(ann.scope, Scope::Sentence(1));
+        assert_eq!(ann.body, Some("dagger passage".to_string()));
+    }
+
+    #[test]
+    fn mark_emphasis_anchored() {
+        let ann = parse_compact(r#"em ^"phrase" | emphasis here"#);
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("em".to_string()));
+        assert_eq!(ann.scope, Scope::Anchor("phrase".to_string()));
+        assert_eq!(ann.body, Some("emphasis here".to_string()));
+    }
+
+    #[test]
+    fn mark_bold_paragraph() {
+        let ann = parse_compact(r"nb \p");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("nb".to_string()));
+        assert_eq!(ann.scope, Scope::Paragraph(1));
+    }
+
+    #[test]
+    fn mark_alone_defaults_sentence() {
+        let ann = parse_compact("gloss");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("gloss".to_string()));
+        assert_eq!(ann.scope, Scope::Sentence(1));
+    }
+
+    #[test]
+    fn mark_with_date() {
+        let ann = parse_compact("hi _ | check this @2026-03");
+        assert_eq!(ann.mark, Some("hi".to_string()));
+        assert_eq!(ann.body, Some("check this".to_string()));
+        assert_eq!(ann.date, Some("2026-03".to_string()));
+    }
+
+    #[test]
+    fn all_sixteen_builtin_marks_parse() {
+        for code in [
+            "nb", "it", "ul", "st", "sc", "hi", "em", "sic", "crux", "lac",
+            "del", "sup", "conj", "dub", "gloss", "interp",
+        ] {
+            let ann = parse_compact(&format!("{code} _"));
+            assert_eq!(ann.annotation_type, AnnotationType::Mark, "code {code}");
+            assert_eq!(ann.mark, Some(code.to_string()), "code {code}");
+        }
+    }
+
+    #[test]
+    fn mark_prose_words_stay_bare() {
+        // it / hi / em / st are common words — a mark code followed by prose
+        // is a bare comment, not a mark
+        for inner in ["it is raining", "hi there everyone", "em dashes are nice", "st paul wrote"] {
+            let ann = parse_compact(inner);
+            assert_eq!(ann.annotation_type, AnnotationType::Bare, "inner {inner}");
+            assert_eq!(ann.mark, None);
+            assert_eq!(ann.body, Some(inner.to_string()));
+        }
+    }
+
+    #[test]
+    fn mark_certainty_followed_by_prose_stays_bare() {
+        // Punctuation must not bypass the prose guard
+        for inner in [
+            "hi! everyone remember this",
+            "it? not sure about this",
+            "st: 21",
+            "em: use a dash here",
+        ] {
+            let ann = parse_compact(inner);
+            assert_eq!(ann.annotation_type, AnnotationType::Bare, "inner {inner}");
+            assert_eq!(ann.mark, None);
+            assert_eq!(ann.body, Some(inner.to_string()));
+        }
+    }
+
+    #[test]
+    fn mark_certainty_with_header_is_mark() {
+        let ann = parse_compact("sic? _");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+
+        let ann = parse_compact("hi! | body note");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.certainty, Certainty::Firm);
+        assert_eq!(ann.body, Some("body note".to_string()));
+
+        let ann = parse_compact("sic?");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.certainty, Certainty::Tentative);
+    }
+
+    #[test]
+    fn mark_followed_by_date_is_mark() {
+        let ann = parse_compact("hi @2026-03");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("hi".to_string()));
+        assert_eq!(ann.date, Some("2026-03".to_string()));
+        // But a bare @ mention is still prose
+        let ann = parse_compact("hi @alice please review");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
+    }
+
+    #[test]
+    fn type_keyword_precedence_over_marks() {
+        // n is always Note, never a mark, even though nb is a mark code
+        let ann = parse_compact("n: _ | note");
+        assert_eq!(ann.annotation_type, AnnotationType::Note);
+        assert_eq!(ann.mark, None);
+    }
+
+    #[test]
+    fn unknown_code_stays_bare() {
+        let ann = parse_compact("zz is not a mark");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
+        assert_eq!(ann.mark, None);
+    }
+
+    #[test]
+    fn structured_mark_annotation() {
+        assert!(is_structured_annotation("hi _"));
+        assert!(!is_structured_annotation("it is raining"));
+    }
+
+    #[test]
+    fn lone_mark_code_is_not_structure() {
+        // The migrate tool must not rewrite plain one-word legacy comments
+        // like <!-- nb --> or <!-- sic -->
+        assert!(!is_structured_annotation("nb"));
+        assert!(!is_structured_annotation("sic"));
+        assert!(!is_structured_annotation("gloss"));
+    }
+
+    #[test]
+    fn lone_mark_code_still_parses_as_mark() {
+        // In a triple-dash comment a lone code still renders as a mark
+        let ann = parse_compact("sic");
+        assert_eq!(ann.annotation_type, AnnotationType::Mark);
+        assert_eq!(ann.mark, Some("sic".to_string()));
+        assert_eq!(ann.body, None);
     }
 
     // llm / th types

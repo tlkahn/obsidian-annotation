@@ -12,7 +12,20 @@ pub enum AnnotationType {
     Translation,
     Llm,
     Thread,
+    /// A philological mark (display-only styling); the code is in `Annotation::mark`
+    Mark,
     Bare,
+}
+
+/// The 16 built-in philological mark codes from the DSL spec.
+pub const BUILTIN_MARK_CODES: [&str; 16] = [
+    "nb", "it", "ul", "st", "sc", "hi", "em", "sic", "crux", "lac", "del", "sup", "conj", "dub",
+    "gloss", "interp",
+];
+
+/// Whether `s` is a built-in philological mark code.
+pub fn is_builtin_mark(s: &str) -> bool {
+    BUILTIN_MARK_CODES.contains(&s)
 }
 
 impl AnnotationType {
@@ -168,6 +181,9 @@ pub struct Annotation {
     /// Optional `[id]` placed immediately after the opening delimiter
     #[serde(default)]
     pub id: Option<String>,
+    /// The mark code when `annotation_type` is `Mark` (e.g. "sic", "hi")
+    #[serde(default)]
+    pub mark: Option<String>,
     pub annotation_type: AnnotationType,
     pub certainty: Certainty,
     pub scope: Scope,
@@ -468,6 +484,7 @@ mod tests {
         let ann = Annotation {
             form: AnnotationForm::Compact,
             id: Some("test-id".to_string()),
+            mark: None,
             annotation_type: AnnotationType::Note,
             certainty: Certainty::Tentative,
             scope: Scope::Words(2),

@@ -8,24 +8,32 @@ use crate::id::extract_id;
 /// the remainder in block or compact form, and report whether it has
 /// detectable structure. Single entry point shared by `parse_annotations`
 /// and `is_structured_annotation` so the two can't diverge.
-pub(crate) fn classify(inner: &str) -> (Option<String>, Annotation, bool) {
+/// `custom_marks` are workspace-defined mark codes (from `.lit/marks.toml`)
+/// recognized alongside the built-in codes.
+pub(crate) fn classify(inner: &str, custom_marks: &[String]) -> (Option<String>, Annotation, bool) {
     let (id, rest) = extract_id(inner);
     if is_block_form(rest) {
-        (id, parse_block(rest), true)
+        (id, parse_block(rest, custom_marks), true)
     } else {
-        let (ann, structured) = parse_compact_inner(rest);
+        let (ann, structured) = parse_compact_inner(rest, custom_marks);
         (id, ann, structured)
     }
 }
 
-/// Parse all annotation comments in a document.
+/// Parse all annotation comments in a document (built-in mark codes only).
 /// Returns annotations ordered by their position in the document.
 pub fn parse_annotations(content: &str) -> Vec<Annotation> {
+    parse_annotations_with_marks(content, &[])
+}
+
+/// Parse all annotation comments in a document, also recognizing the given
+/// custom mark codes in the type slot.
+pub fn parse_annotations_with_marks(content: &str, custom_marks: &[String]) -> Vec<Annotation> {
     let raw_comments = scan_comments(content);
     let mut annotations = Vec::with_capacity(raw_comments.len());
 
     for rc in raw_comments {
-        let (id, mut ann, _) = classify(&rc.inner);
+        let (id, mut ann, _) = classify(&rc.inner, custom_marks);
 
         // Fill in position, id, and original text from scanner
         ann.id = id;
@@ -232,6 +240,64 @@ mod tests {
         let doc = "<!--- app: | variant: ms. B has *prakāśa* --->";
         let anns = parse_annotations(doc);
         assert_eq!(anns[0].annotation_type, AnnotationType::Apparatus);
+    }
+
+    #[test]
+    fn mark_integration() {
+        let doc = "<!--- hi _ ---> and <!--- sic? __ --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns.len(), 2);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Mark);
+        assert_eq!(anns[0].mark, Some("hi".to_string()));
+        assert_eq!(anns[1].mark, Some("sic".to_string()));
+        assert_eq!(anns[1].certainty, Certainty::Tentative);
+    }
+
+    #[test]
+    fn custom_mark_recognized() {
+        let doc = "<!--- mymark _ | styled --->";
+        let custom = vec!["mymark".to_string()];
+        let anns = parse_annotations_with_marks(doc, &custom);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Mark);
+        assert_eq!(anns[0].mark, Some("mymark".to_string()));
+        assert_eq!(anns[0].scope, Scope::Words(1));
+        assert_eq!(anns[0].body, Some("styled".to_string()));
+    }
+
+    #[test]
+    fn custom_mark_unknown_without_registration() {
+        let doc = "<!--- mymark _ | styled --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Bare);
+        assert_eq!(anns[0].mark, None);
+    }
+
+    #[test]
+    fn custom_mark_cannot_shadow_type_keyword() {
+        let doc = "<!--- n: _ | note --->";
+        let custom = vec!["n".to_string()];
+        let anns = parse_annotations_with_marks(doc, &custom);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Note);
+        assert_eq!(anns[0].mark, None);
+    }
+
+    #[test]
+    fn custom_mark_in_block_form() {
+        let doc = "<!---\nmymark\n---\nBody.\n--->";
+        let custom = vec!["mymark".to_string()];
+        let anns = parse_annotations_with_marks(doc, &custom);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Mark);
+        assert_eq!(anns[0].mark, Some("mymark".to_string()));
+    }
+
+    #[test]
+    fn custom_mark_prose_guard_applies() {
+        // Custom codes get the same prose-ambiguity guard as built-ins
+        let doc = "<!--- mymark went to town --->";
+        let custom = vec!["mymark".to_string()];
+        let anns = parse_annotations_with_marks(doc, &custom);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Bare);
+        assert_eq!(anns[0].body, Some("mymark went to town".to_string()));
     }
 
     #[test]
