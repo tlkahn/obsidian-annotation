@@ -257,6 +257,20 @@ fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(
     }
 }
 
+/// Locate every sentence in `paragraph` sequentially: each search starts at
+/// the previous sentence's end, so duplicated sentence text cannot re-match
+/// an earlier occurrence. Returns byte ranges relative to `paragraph`.
+fn locate_sentences(paragraph: &str, sentences: &[String]) -> Option<Vec<(usize, usize)>> {
+    let mut positions = Vec::with_capacity(sentences.len());
+    let mut cursor = 0;
+    for sentence in sentences {
+        let (start, end) = ws_flexible_find(paragraph, sentence, cursor)?;
+        positions.push((start, end));
+        cursor = end;
+    }
+    Some(positions)
+}
+
 /// Byte range of the last N sentences before `byte_start` using sentenza.
 /// Extracts the current paragraph (up to `byte_start`) and splits into sentences.
 fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
@@ -280,16 +294,13 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
         return None;
     }
 
-    // Take the last n sentences (or all if fewer available)
+    // Take the last n sentences (or all if fewer available). Sequential
+    // location handles both sentenza's whitespace normalization and
+    // duplicated sentence text.
     let take = n.min(sentences.len());
-    let first_sentence = &sentences[sentences.len() - take];
-    let last_sentence = &sentences[sentences.len() - 1];
-
-    // Use whitespace-flexible search: sentenza may normalize whitespace during
-    // preprocessing (e.g. collapsing double spaces), so the returned sentence text
-    // might not match the original paragraph verbatim.
-    let (first_start, _) = ws_flexible_find(paragraph, first_sentence, 0)?;
-    let (_, last_end) = ws_flexible_find(paragraph, last_sentence, first_start)?;
+    let positions = locate_sentences(paragraph, &sentences)?;
+    let first_start = positions[positions.len() - take].0;
+    let last_end = positions[positions.len() - 1].1;
 
     let scope_start_byte = para_byte_start + first_start;
     let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
@@ -318,15 +329,9 @@ fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Opti
     }
 
     let take = m.min(sentences.len());
-    let last_sentence = &sentences[take - 1];
-
-    // ws_flexible_find: sentenza may normalize whitespace during preprocessing
-    let (first_start, first_end) = ws_flexible_find(paragraph, &sentences[0], 0)?;
-    let (_, last_end) = if take == 1 {
-        (first_start, first_end)
-    } else {
-        ws_flexible_find(paragraph, last_sentence, first_start)?
-    };
+    let positions = locate_sentences(paragraph, &sentences)?;
+    let first_start = positions[0].0;
+    let last_end = positions[take - 1].1;
 
     Some((start + first_start, start + last_end))
 }
@@ -920,6 +925,34 @@ mod tests {
         let comment_utf16: usize = "<!--- n: \\h | 注 --->".chars().map(|c| c.len_utf16()).sum();
         let result = resolve_scope_range(content, ann_utf16, ann_utf16 + comment_utf16, &Scope::Section, "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, ann_utf16 + comment_utf16)));
+    }
+
+    // ── Duplicated sentence text (sequential location) ──
+
+    #[test]
+    fn duplicate_sentences_backward() {
+        let content = "Stop now. Stop now.<!--- n: \\ss | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(2), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, 19))); // both occurrences, not a re-match of the first
+    }
+
+    #[test]
+    fn duplicate_sentences_forward() {
+        let content = "Intro. <!--- n: 0\\s2 | x ---> Stop now. Stop now.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s2 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 2), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((30, 49)));
+    }
+
+    #[test]
+    fn duplicate_sentence_backward_single() {
+        // \s over a paragraph whose last sentence duplicates an earlier one
+        let content = "Stop now. Middle bit. Stop now.<!--- n: \\s | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((22, 31))); // the second "Stop now.", not the first
     }
 
     // ── Bidirectional mode ──
