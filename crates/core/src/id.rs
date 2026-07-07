@@ -25,7 +25,12 @@ pub fn extract_id(inner: &str) -> (Option<String>, &str) {
     if !valid {
         return (None, inner);
     }
-    (Some(candidate.to_string()), rest[close + 1..].trim_start())
+    // `[text](url)` / `[text][ref]` are markdown links, not IDs
+    let after = &rest[close + 1..];
+    if after.starts_with('(') || after.starts_with('[') {
+        return (None, inner);
+    }
+    (Some(candidate.to_string()), after.trim_start())
 }
 
 #[cfg(test)]
@@ -107,6 +112,26 @@ mod tests {
     #[test]
     fn unterminated_bracket_invalid() {
         assert_eq!(extract_id("[unterminated x"), (None, "[unterminated x"));
+    }
+
+    #[test]
+    fn markdown_inline_link_not_an_id() {
+        let inner = "[homepage](https://example.com) worth reading";
+        assert_eq!(extract_id(inner), (None, inner));
+    }
+
+    #[test]
+    fn markdown_reference_link_not_an_id() {
+        let inner = "[text][ref] more";
+        assert_eq!(extract_id(inner), (None, inner));
+    }
+
+    #[test]
+    fn id_followed_by_spaced_paren_still_valid() {
+        assert_eq!(
+            extract_id("[id3] (parenthetical) note"),
+            (Some("id3".to_string()), "(parenthetical) note")
+        );
     }
 
     #[test]
