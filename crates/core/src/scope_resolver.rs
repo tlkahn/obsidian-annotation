@@ -310,15 +310,18 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
 
 /// Byte range of the first M sentences following `byte_end` (starting with
 /// the remainder of the current sentence), limited to the current paragraph
-/// and clamped to what is available.
+/// and clamped to what is available. An annotation at the end of its
+/// paragraph contributes nothing forward — the `\n\n` cut applies before
+/// any whitespace is skipped, so resolution never jumps into the next
+/// paragraph.
 fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Option<(usize, usize)> {
     let after = &content[byte_end..];
-    let start = byte_end + (after.len() - after.trim_start().len());
-    let text = &content[start..];
 
-    // Limit to the current paragraph
-    let para_len = text.find("\n\n").unwrap_or(text.len());
-    let paragraph = text[..para_len].trim_end();
+    // Limit to the current paragraph FIRST, then trim within it
+    let para_len = after.find("\n\n").unwrap_or(after.len());
+    let para_slice = &after[..para_len];
+    let start = byte_end + (para_slice.len() - para_slice.trim_start().len());
+    let paragraph = para_slice.trim();
     if paragraph.is_empty() {
         return None;
     }
@@ -925,6 +928,26 @@ mod tests {
         let comment_utf16: usize = "<!--- n: \\h | 注 --->".chars().map(|c| c.len_utf16()).sum();
         let result = resolve_scope_range(content, ann_utf16, ann_utf16 + comment_utf16, &Scope::Section, "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, ann_utf16 + comment_utf16)));
+    }
+
+    // ── Forward sentence stays in the current paragraph ──
+
+    #[test]
+    fn forward_sentence_at_paragraph_end_contributes_nothing() {
+        let content = "A one. <!--- n: 0\\s1 | x --->\n\nNext para sentence.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 1), "en", ResolutionMode::Backward);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn asym_sentence_at_paragraph_end_backward_only() {
+        let content = "A one. <!--- n: 1\\s1 | x --->\n\nNext para sentence.";
+        let ann = content.find("<!---").unwrap();
+        let ann_end = ann + "<!--- n: 1\\s1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(1, 1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, 6))); // "A one." — forward side empty
     }
 
     // ── Duplicated sentence text (sequential location) ──
