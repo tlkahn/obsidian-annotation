@@ -29,10 +29,10 @@ Annotations are written as triple-dash HTML comments: `<!--- ... --->`. Standard
 ### Compact form (inline)
 
 ```
-<!---[ID] TYPE-OR-MARK CERTAINTY SCOPE ^"ANCHOR" | BODY @DATE --->
+<!---[ID] TYPE-OR-MARK CERTAINTY SCOPE | BODY @DATE --->
 ```
 
-All fields are optional. Some examples:
+All fields are optional. SCOPE is either a scope token (`_`, `\p`, `\h`, `2\s1`, ...) or an anchor `^"text"` - an anchor is a kind of scope, so writing both keeps only the anchor. Some examples:
 
 | Example | Meaning |
 |---------|---------|
@@ -74,7 +74,7 @@ An optional ID in square brackets can be placed immediately after the opening de
 <!---[my-note-id] n: \p | body text --->
 ```
 
-Valid ID characters: letters, digits, hyphens, underscores, and dots; the first character must be alphanumeric. An invalid ID is not an error - the bracketed text simply stays part of the body, and markdown links like `[text](url)` are never treated as IDs. IDs appear as a tooltip on pills and markers and as a badge in callout headers and the side panel.
+Valid ID characters: letters, digits, hyphens, underscores, and dots; the first character must be alphanumeric. An invalid ID is not a hard error: in a plain comment the bracketed text simply stays part of the body (in a structured annotation with a `|` pipe it is discarded along with any other unrecognized header text), and markdown links like `[text](url)` are never treated as IDs. IDs appear as a tooltip on pills and markers and as a badge in callout headers and the side panel.
 
 ### Types
 
@@ -87,7 +87,7 @@ Valid ID characters: letters, digits, hyphens, underscores, and dots; the first 
 | `app` | Apparatus | Terracotta |
 | `tr` | Translation | Teal |
 | `llm` | LLM (AI-generated or AI-directed content, render-only) | Magenta |
-| `th` | Thread (conversational note; renders as a plain callout) | Orange |
+| `th` | Thread (conversational note; renders like any other type - pill inline, callout in block form) | Orange |
 | _(none)_ | Annotation | Gray |
 
 ### Certainty
@@ -114,7 +114,7 @@ Scope indicates how much surrounding text the annotation applies to.
 | `3_1` | Asymmetric words: 3 before, 1 after |
 | `2\s1` / `3\p1` / `2\f0` | Asymmetric sentences / paragraphs / pages (N before, M after, single digits) |
 
-When a scope requests more units than exist, it gracefully extends to the document boundary. Letter-repeat (`\pp`) and underscore-suffix (`\p__`) forms are equivalent.
+Letter-repeat and underscore-suffix forms are equivalent, and the underscores give the count: `\p_` = 1 paragraph (same as `\p`), `\p__` = 2 (same as `\pp`), `\p___` = 3, likewise for `\s` and `\f`. When a scope requests more units than exist, word/paragraph/page scopes gracefully extend to the document boundary; sentence scopes are limited to the current paragraph and clamp at its edges (a deliberate divergence from the Lit spec).
 
 ### Philological marks
 
@@ -166,7 +166,7 @@ cargo run -p annotation-core --bin migrate -- /path/to/vault --dry-run   # repor
 cargo run -p annotation-core --bin migrate -- /path/to/vault             # rewrite files
 ```
 
-Only comments with detectable annotation structure (type keyword, certainty mark, scope token, anchor, `|` pipe, `@date`, or block form) are converted to `<!--- --->`. Plain prose comments are deliberately left untouched, including tricky cases: `<!-- fix this later -->`, `<!-- [TODO] see below -->` (bracketed word, not an ID), `<!-- 2_4 is the ratio -->` (digit token, not an asymmetric scope), `<!-- it is raining -->` and `<!-- nb -->` (mark-code words in prose). The tool skips hidden directories (e.g. `.obsidian`), fenced code blocks, and is safe to run repeatedly (idempotent). Use `--ext` to migrate a different file extension (default `md`). The Lit spec's legacy `%%! ... %%` delimiters are not supported.
+Only comments with detectable annotation structure (type keyword, certainty mark, scope token, anchor, `|` pipe, `@date`, or block form) are converted to `<!--- --->`. Plain prose comments are deliberately left untouched, including tricky cases: `<!-- fix this later -->`, `<!-- [TODO] see below -->` (a valid ID, but an ID alone is not annotation structure), `<!-- 2_4 is the ratio -->` (digit token followed by prose, not an asymmetric scope), `<!-- it is raining -->` and `<!-- nb -->` (mark-code words in prose; lone mark codes are not structure either). The tool skips hidden directories (e.g. `.obsidian`), fenced code blocks, and is safe to run repeatedly (idempotent). Use `--ext` to migrate a different file extension (default `md`). The Lit spec's legacy `%%! ... %%` delimiters are not supported.
 
 ## Display modes
 
@@ -198,7 +198,7 @@ When you hover over an inline annotation (pill or marker), the plugin highlights
 | `\p` / `\pp` | Current / current + preceding paragraph |
 | `\f` | Current page (from last form-feed) |
 | `\h` | The current heading section |
-| `\d` | The entire document (shown with a fainter tint) |
+| `\d` | The entire document |
 | `^"text"` | The nearest preceding occurrence of "text" |
 | `2\p1` etc. | Asymmetric ranges before and after the annotation |
 | _(none)_ | The preceding sentence (default) |

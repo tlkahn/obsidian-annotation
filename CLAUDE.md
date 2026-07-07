@@ -57,10 +57,10 @@ cargo run -p annotation-core --bin migrate -- <vault> [--dry-run] [--ext md]   #
 ## DSL reference (compact form)
 
 ```
-<!---[ID] TYPE-OR-MARK CERTAINTY SCOPE ^"ANCHOR" | BODY @DATE --->
+<!---[ID] TYPE-OR-MARK CERTAINTY SCOPE | BODY @DATE --->
 ```
 
-All parts optional. Examples:
+All parts optional; SCOPE is a scope token or an anchor `^"text"` (an anchor replaces any scope token, they never compose). Examples:
 - `<!--- n? __ | same sense as TA 3.68? @2026-03 --->`
 - `<!--- todo! ^"8th century" | verify date --->`
 - `<!--- cf \pp --->`
