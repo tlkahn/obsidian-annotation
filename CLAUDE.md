@@ -57,27 +57,34 @@ cargo run -p annotation-core --bin migrate -- <vault> [--dry-run] [--ext md]   #
 ## DSL reference (compact form)
 
 ```
-<!--- TYPE CERTAINTY SCOPE | BODY @DATE --->
+<!---[ID] TYPE-OR-MARK CERTAINTY SCOPE | BODY @DATE --->
 ```
 
-Examples:
+All parts optional; SCOPE is a scope token or an anchor `^"text"` (an anchor replaces any scope token, they never compose). Examples:
 - `<!--- n? __ | same sense as TA 3.68? @2026-03 --->`
 - `<!--- todo! ^"8th century" | verify date --->`
 - `<!--- cf \pp --->`
 - `<!--- tr: _ | tentative rendering @2026-03 --->`
+- `<!---[my-id] n: \p | body text --->` (annotation ID)
+- `<!--- llm \d | summarize entire document --->` (document scope)
+- `<!--- n: \h | section note --->` (heading-section scope)
+- `<!--- n: 2\p1 | two paragraphs before, one after --->` (asymmetric)
+- `<!--- hi _ --->` / `<!--- sic? _ --->` / `<!--- em ^"phrase" | note --->` (marks)
 - `<!--- just a bare comment --->`
 
 ## DSL reference (block form)
 
 ```html
-<!---
-TYPE CERTAINTY
+<!---[ID]
+TYPE-OR-MARK CERTAINTY
 SCOPE
 @DATE
 ---
 Markdown body
 --->
 ```
+
+Header lines can appear in any order; the first `---` line separates head from body. The Lit spec's legacy `%%! ... %%` delimiters are NOT supported by this plugin.
 
 ## Files that matter most
 
