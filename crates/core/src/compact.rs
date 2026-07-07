@@ -14,9 +14,21 @@ static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
 });
 
-/// Parse a compact form annotation from the inner text of an HTML comment.
+/// Parse a compact form annotation from the inner text of an annotation comment.
 /// Returns the parsed annotation (with char_start/char_end/original zeroed — caller fills those in).
 pub fn parse_compact(inner: &str) -> Annotation {
+    parse_compact_inner(inner).0
+}
+
+/// Whether the inner text has detectable annotation structure (type keyword,
+/// certainty mark, scope token, anchor, pipe, date) or is block form.
+/// Plain prose comments return false.
+pub fn is_structured_annotation(inner: &str) -> bool {
+    crate::block::is_block_form(inner) || parse_compact_inner(inner).1
+}
+
+/// Parse the compact form, also returning whether any structure was detected.
+fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
     let mut remaining = inner;
     let mut annotation_type = AnnotationType::Bare;
     let mut certainty = Certainty::Neutral;
@@ -117,30 +129,36 @@ pub fn parse_compact(inner: &str) -> Annotation {
 
     if !is_structured {
         // Nothing structured found — treat entire inner text as bare body
-        return Annotation {
+        return (
+            Annotation {
+                form: AnnotationForm::Compact,
+                annotation_type: AnnotationType::Bare,
+                certainty: Certainty::Neutral,
+                scope: Scope::Sentence(1),
+                body: Some(inner.to_string()),
+                date: None,
+                char_start: 0,
+                char_end: 0,
+                original: String::new(),
+            },
+            false,
+        );
+    }
+
+    (
+        Annotation {
             form: AnnotationForm::Compact,
-            annotation_type: AnnotationType::Bare,
-            certainty: Certainty::Neutral,
-            scope: Scope::Sentence(1),
-            body: Some(inner.to_string()),
-            date: None,
+            annotation_type,
+            certainty,
+            scope,
+            body,
+            date,
             char_start: 0,
             char_end: 0,
             original: String::new(),
-        };
-    }
-
-    Annotation {
-        form: AnnotationForm::Compact,
-        annotation_type,
-        certainty,
-        scope,
-        body,
-        date,
-        char_start: 0,
-        char_end: 0,
-        original: String::new(),
-    }
+        },
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -351,5 +369,57 @@ mod tests {
         let a = parse_compact(r"n: \s___ | note");
         let b = parse_compact(r"n: \sss | note");
         assert_eq!(a.scope, b.scope);
+    }
+
+    // is_structured_annotation
+
+    #[test]
+    fn structured_type_keyword() {
+        assert!(is_structured_annotation("n: check TA 3.68"));
+    }
+
+    #[test]
+    fn structured_certainty_and_date() {
+        assert!(is_structured_annotation("todo! verify @2026-03"));
+    }
+
+    #[test]
+    fn structured_scope_token() {
+        assert!(is_structured_annotation(r"cf \pp"));
+    }
+
+    #[test]
+    fn structured_pipe_only() {
+        assert!(is_structured_annotation("| body only"));
+    }
+
+    #[test]
+    fn structured_date_only() {
+        assert!(is_structured_annotation("note @2026-03"));
+    }
+
+    #[test]
+    fn structured_type_with_certainty() {
+        assert!(is_structured_annotation("n?"));
+    }
+
+    #[test]
+    fn structured_block_form() {
+        assert!(is_structured_annotation("n\n---\nbody"));
+    }
+
+    #[test]
+    fn unstructured_plain_prose() {
+        assert!(!is_structured_annotation("fix this later"));
+    }
+
+    #[test]
+    fn unstructured_raw_prefix() {
+        assert!(!is_structured_annotation("raw: build marker"));
+    }
+
+    #[test]
+    fn unstructured_empty() {
+        assert!(!is_structured_annotation(""));
     }
 }

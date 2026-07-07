@@ -8,7 +8,7 @@ Rust core parses annotation DSL, compiled to WASM. TypeScript handles Obsidian i
 Document text
   │
   ▼
-scanner.rs ── find <!-- --> comments, skip code fences & raw:, emit UTF-16 offsets
+scanner.rs ── find <!--- ---> comments, skip code fences, emit UTF-16 offsets
   │
   ▼
 parser.rs ── classify each comment (block vs compact) and dispatch
@@ -27,7 +27,7 @@ live-mode.ts ── CM6 EditorView.decorations.compute()
   ├─ CalloutWidget      ├─ PillWidget                   ├─ MarkerWidget
   │  (block form)       │  (compact/pill)               │  (compact/footnote)
   ▼                     ▼                               ▼
-DOM widgets replace <!-- --> in editor, expand on cursor proximity
+DOM widgets replace <!--- ---> in editor, expand on cursor proximity
                         │                               │
                         └──── mouseenter/mouseleave ────┘
                                       │
@@ -46,7 +46,7 @@ DOM widgets replace <!-- --> in editor, expand on cursor proximity
 ### Compact form (single-line)
 
 ```
-<!-- TYPE CERTAINTY SCOPE | BODY @DATE -->
+<!--- TYPE CERTAINTY SCOPE | BODY @DATE --->
 ```
 
 | Field | Syntax | Examples |
@@ -63,29 +63,29 @@ Everything is optional. A comment with no recognized structure becomes a "bare" 
 ### Block form (multi-line)
 
 ```html
-<!--
+<!---
 TYPE CERTAINTY
 SCOPE
 @DATE
 ^"ANCHOR"
 ---
 Markdown body here.
--->
+--->
 ```
 
-Head lines (above `---`) are parsed one-per-line for type, scope, date, anchor. Body (below `---`) is arbitrary Markdown.
+Head lines (above `---`) are parsed one-per-line for type, scope, date, anchor. Body (below `---`) is arbitrary Markdown. The scanner strips the `--->` closer before block parsing, so dash runs in the body never collide with the `---` separator.
 
 ### Opt-out
 
-`<!-- raw: anything -->` is skipped entirely. Comments inside fenced code blocks are also skipped.
+Standard `<!-- -->` comments are skipped entirely -- only triple-dash `<!--- --->` comments are annotations. Annotation comments inside fenced code blocks are also skipped.
 
 ## Parsing Pipeline
 
 ### 1. Scanner (`scanner.rs`)
 
-- Two-pass: first finds fenced code block byte ranges, then scans for `<!-- -->` outside those ranges
+- Two-pass: first finds fenced code block byte ranges, then scans for `<!--- --->` outside those ranges
+- Standard `<!-- -->` comments never match (`find("<!---")` requires the third dash); a `<!--- ... -->` comment with no `--->` closer is treated as unclosed
 - UTF-16 offset tracking: incremental accumulation for CM6 compatibility (JS strings are UTF-16)
-- Skips `raw:` prefix comments
 - Returns `Vec<RawComment>` with `char_start`, `char_end`, `inner` (trimmed), `original`
 
 ### 2. Classifier (`parser.rs`)
@@ -102,7 +102,13 @@ Sequential greedy matching:
 5. Split on `|` for body
 6. Extract `@date` from body
 
-Uses `is_structured` flag: if nothing structured was found, the entire text becomes a bare annotation body.
+Uses `is_structured` flag: if nothing structured was found, the entire text becomes a bare annotation body. The flag is also exposed as `is_structured_annotation(inner)` (structured compact fields or block form), used by the migration tool to decide which legacy comments to convert.
+
+### Migration tool (`migrate.rs` + `bin/migrate.rs`)
+
+- `migrate_content(content) -> MigrationResult { output, conversions }` converts legacy structured `<!-- -->` comments to `<!--- --->`, preserving inner whitespace exactly
+- Skips: already-triple-dash comments (idempotent), comments in fenced code blocks, unclosed comments, and unstructured comments (plain prose, `raw:`)
+- CLI: `cargo run -p annotation-core --bin migrate -- <vault-path> [--dry-run] [--ext md]` -- recursive over the vault, skips hidden directories, reports per-file conversion counts
 
 ### 4. Block parser (`block.rs`)
 
@@ -144,7 +150,7 @@ Letter-repetition (`\ss`) and underscore-suffix (`\s__`) are equivalent. Count =
 - `EditorView.decorations.compute(["doc", "selection"], ...)` recomputes on every doc change and cursor move
 - `isInEditableRange()`: hides decoration when cursor is within +/-1 char buffer of the annotation, allowing the user to edit the raw source
 - Routes: block -> `CalloutWidget`, compact -> `PillWidget` (default) or `MarkerWidget` (footnote mode)
-- Decorations are `Decoration.replace({ widget })` that replace the full `<!-- -->` range
+- Decorations are `Decoration.replace({ widget })` that replace the full `<!--- --->` range
 
 ### Widgets (`widgets.ts`)
 
@@ -244,7 +250,7 @@ Hovering over a PillWidget or MarkerWidget highlights the text the annotation's 
 
 ### ESC to Exit Annotation Edit Mode (`escape-annotation.ts`)
 
-When the cursor is inside an annotation's editable range, the raw `<!-- -->` source is shown instead of the rendered widget. Pressing ESC moves the cursor out of the annotation, causing it to re-render as a widget.
+When the cursor is inside an annotation's editable range, the raw `<!--- --->` source is shown instead of the rendered widget. Pressing ESC moves the cursor out of the annotation, causing it to re-render as a widget.
 
 **CM6 keymap** (`createEscapeAnnotationExtension`):
 - Registers `keymap.of([{ key: "Escape", run: handler }])` at default priority
@@ -258,7 +264,7 @@ When the cursor is inside an annotation's editable range, the raw `<!-- -->` sou
 - No default hotkey — the CM6 keymap already handles ESC directly
 - Uses the same `findAnnotationAtCursor()` helper but through Obsidian's `Editor` API (`getCursor`, `posToOffset`, `offsetToPos`)
 
-**Buffer-zone pitfall**: `isInEditableRange()` expands each annotation's range by `buffer = 1` on both sides, so the editable zone spans `[char_start - 1, char_end + 1]` inclusive. The cursor must be placed at `char_end + 2` (not `char_end + 1`) to land outside this zone and trigger widget re-rendering. Placing it at `char_end + 1` leaves the cursor inside the expanded range — the annotation stays in raw-source mode even though the cursor appears to have moved past the `-->` close. This off-by-one is easy to miss because the buffer expansion is an implementation detail of `isInEditableRange()` in `live-mode.ts`, not visible at the call site.
+**Buffer-zone pitfall**: `isInEditableRange()` expands each annotation's range by `buffer = 1` on both sides, so the editable zone spans `[char_start - 1, char_end + 1]` inclusive. The cursor must be placed at `char_end + 2` (not `char_end + 1`) to land outside this zone and trigger widget re-rendering. Placing it at `char_end + 1` leaves the cursor inside the expanded range — the annotation stays in raw-source mode even though the cursor appears to have moved past the `--->` close. This off-by-one is easy to miss because the buffer expansion is an implementation detail of `isInEditableRange()` in `live-mode.ts`, not visible at the call site.
 
 **Vim mode compatibility**: Obsidian's Vim mode registers its ESC handler before plugin extensions. On ESC in insert mode, Vim's handler fires first (insert → normal) and consumes the event. Our handler only fires on a subsequent ESC press when the cursor is in normal mode inside an annotation range.
 
@@ -268,9 +274,9 @@ When the cursor is inside an annotation's editable range, the raw `<!-- -->` sou
 
 2. **UTF-16 offsets**: CM6 (and JavaScript strings) use UTF-16 code units. The scanner tracks UTF-16 offsets incrementally to avoid O(n) rescanning.
 
-3. **Bare annotations**: Any `<!-- -->` that doesn't match structured DSL syntax is treated as a bare annotation (gray pill). This ensures all comments are visible in edit mode.
+3. **Bare annotations**: Any `<!--- --->` that doesn't match structured DSL syntax is treated as a bare annotation (gray pill). This ensures all annotation comments are visible in edit mode.
 
-4. **`raw:` opt-out**: Provides escape hatch for comments that should remain invisible (e.g., metadata, build markers).
+4. **Standard comments as the opt-out**: Only triple-dash `<!--- --->` comments are annotations; standard `<!-- -->` comments are left untouched. This inverts the old `raw:`-prefix scheme -- comments that should remain invisible (metadata, build markers, plain prose) simply stay standard comments, with no special prefix needed.
 
 5. **Cursor-proximity expansion**: When the cursor is within 1 char of an annotation, the decoration is hidden and the raw HTML comment is shown, enabling direct editing.
 
