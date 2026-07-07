@@ -11,7 +11,7 @@ static ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static SCOPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(_{1,}|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
+    Regex::new(r"^(_{1,}|[0-9]_[0-9]|[0-9]\\[spf][0-9]|\\h|\\d|\\p(?:p+|_{1,})?|\\f(?:f+|_{1,})?|\\s(?:s+|_{1,})?)\s").unwrap()
 });
 
 /// Parse a compact form annotation from the inner text of an annotation comment.
@@ -76,11 +76,31 @@ pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
     remaining = remaining.trim_start();
 
     // Step 3: Try to match scope (underscores or \p / \pp)
+    // A new-style token (asymmetric, \h, \d) in a headerless comment is
+    // ambiguous with prose (e.g. "2_4 is the ratio"); it only counts as
+    // scope when a type/certainty preceded it or a | (or end) follows.
+    let is_new_style = |sc: &Scope| {
+        matches!(
+            sc,
+            Scope::Section
+                | Scope::Document
+                | Scope::AsymWords(..)
+                | Scope::AsymSentence(..)
+                | Scope::AsymParagraph(..)
+                | Scope::AsymPage(..)
+        )
+    };
     if let Some(caps) = SCOPE_RE.captures(remaining) {
         let scope_str = caps.get(1).unwrap().as_str();
-        scope = Scope::from_str(scope_str);
-        remaining = &remaining[caps.get(0).unwrap().end()..];
-        is_structured = true;
+        let parsed = Scope::from_str(scope_str);
+        let rest = &remaining[caps.get(0).unwrap().end()..];
+        let ambiguous_prose =
+            !is_structured && is_new_style(&parsed) && !rest.trim_start().starts_with('|');
+        if !ambiguous_prose {
+            scope = parsed;
+            remaining = rest;
+            is_structured = true;
+        }
     } else if remaining.starts_with('_') && remaining.chars().all(|c| c == '_') {
         // Scope at end with no trailing space (e.g. "n: __")
         scope = Scope::from_str(remaining);
@@ -373,6 +393,109 @@ mod tests {
         let a = parse_compact(r"n: \s___ | note");
         let b = parse_compact(r"n: \sss | note");
         assert_eq!(a.scope, b.scope);
+    }
+
+    // Section / Document / asymmetric scopes
+
+    #[test]
+    fn section_scope_with_body() {
+        let ann = parse_compact(r"n: \h | section note");
+        assert_eq!(ann.scope, Scope::Section);
+        assert_eq!(ann.body, Some("section note".to_string()));
+    }
+
+    #[test]
+    fn document_scope_with_body() {
+        let ann = parse_compact(r"llm \d | summarize entire document");
+        assert_eq!(ann.annotation_type, AnnotationType::Llm);
+        assert_eq!(ann.scope, Scope::Document);
+    }
+
+    #[test]
+    fn section_scope_at_end() {
+        let ann = parse_compact(r"cf \h");
+        assert_eq!(ann.annotation_type, AnnotationType::CrossRef);
+        assert_eq!(ann.scope, Scope::Section);
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn document_scope_at_end() {
+        let ann = parse_compact(r"cf \d");
+        assert_eq!(ann.scope, Scope::Document);
+    }
+
+    #[test]
+    fn asym_paragraph_scope_with_body() {
+        let ann = parse_compact(r"n: 2\p1 | two before one after");
+        assert_eq!(ann.scope, Scope::AsymParagraph(2, 1));
+        assert_eq!(ann.body, Some("two before one after".to_string()));
+    }
+
+    #[test]
+    fn asym_words_scope_with_body() {
+        let ann = parse_compact("n: 3_1 | words around");
+        assert_eq!(ann.scope, Scope::AsymWords(3, 1));
+    }
+
+    #[test]
+    fn asym_sentence_scope_at_end() {
+        let ann = parse_compact(r"cf 2\s1");
+        assert_eq!(ann.scope, Scope::AsymSentence(2, 1));
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn asym_page_scope_forward_only() {
+        let ann = parse_compact(r"n: 0\s2 | forward only");
+        assert_eq!(ann.scope, Scope::AsymSentence(0, 2));
+    }
+
+    // Headerless new-token guard: a new-style scope token (asym, \h, \d) with
+    // no preceding type/certainty only counts as scope when followed by | or end
+
+    #[test]
+    fn digit_leading_bare_comment_stays_bare() {
+        let ann = parse_compact("2_4 is the ratio");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
+        assert_eq!(ann.scope, Scope::Sentence(1));
+        assert_eq!(ann.body, Some("2_4 is the ratio".to_string()));
+    }
+
+    #[test]
+    fn document_token_bare_prose_stays_bare() {
+        let ann = parse_compact(r"\d is a TeX macro");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
+        assert_eq!(ann.scope, Scope::Sentence(1));
+        assert_eq!(ann.body, Some(r"\d is a TeX macro".to_string()));
+    }
+
+    #[test]
+    fn headerless_asym_with_pipe_is_scope() {
+        let ann = parse_compact("2_4 | note");
+        assert_eq!(ann.scope, Scope::AsymWords(2, 4));
+        assert_eq!(ann.body, Some("note".to_string()));
+    }
+
+    #[test]
+    fn headerless_asym_alone_is_scope() {
+        let ann = parse_compact("2_4");
+        assert_eq!(ann.scope, Scope::AsymWords(2, 4));
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn typed_asym_prose_body_still_scope() {
+        // With a type keyword present, the token is unambiguous header material
+        let ann = parse_compact("n: 2_4 no pipe body");
+        assert_eq!(ann.scope, Scope::AsymWords(2, 4));
+        assert_eq!(ann.body, Some("no pipe body".to_string()));
+    }
+
+    #[test]
+    fn unstructured_digit_leading_prose() {
+        assert!(!is_structured_annotation("2_4 is the ratio"));
+        assert!(is_structured_annotation("2_4 | x"));
     }
 
     // llm / th types

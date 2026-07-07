@@ -17,10 +17,11 @@ install.sh           Build + install to Obsidian vault
 - **Two annotation forms**: compact (single-line, inline) and block (multi-line, `---` separator)
 - **Nine types**: `n` (note), `q` (question), `todo`, `cf` (cross-ref), `app` (apparatus), `tr` (translation), `llm` (LLM content), `th` (thread), bare (untyped)
 - **Annotation IDs**: optional `[id]` immediately after `<!---` in both forms (charset: alphanumeric first char, then letters/digits/`-`/`_`/`.`); invalid IDs fall through to body text, and markdown links `[text](url)` are never treated as IDs
-- **Scope system**: `_`/`__`/`___` (words), `\s`/`\ss`/`\sss` (sentences, default), `\p`/`\pp`/`\ppp` (paragraphs), `\f`/`\ff`/`\fff` (pages), `^"text"` (anchor). Underscore suffix equivalent: `\p__` = `\pp`
+- **Scope system**: `_`/`__`/`___` (words), `\s`/`\ss`/`\sss` (sentences, default), `\p`/`\pp`/`\ppp` (paragraphs), `\f`/`\ff`/`\fff` (pages), `\h` (heading section), `\d` (document), `^"text"` (anchor), asymmetric `N_M` / `N\sM` / `N\pM` / `N\fM` (N units before, M after, single digits). Underscore suffix equivalent: `\p__` = `\pp`
+- **Scope resolution**: `resolve_scope_range(content, char_start, char_end, scope, lang, mode)` - graceful clamp to document boundaries; modes `backward` (default) and `bidirectional` (symmetric scopes extend both ways by the same count)
 - **Two display modes** for compact annotations: pill (inline colored chip) or footnote (superscript marker + side panel)
 - **Block annotations** always render as foldable callouts
-- **Scope hover highlight**: hovering a pill/marker highlights the scoped text (preceding N words, sentence, paragraph, page, or anchor match)
+- **Scope hover highlight**: hovering a pill/marker highlights the scoped text (N words/sentences/paragraphs/pages backward, heading section, whole document, anchor match, or asymmetric before/after ranges)
 - **ESC to exit edit mode**: pressing ESC when cursor is inside an annotation moves cursor out, re-rendering the widget
 - **Standard `<!-- -->` comments are the opt-out**: only `<!--- --->` renders as an annotation
 - UTF-16 offsets throughout (CM6/JS compatibility)
@@ -81,7 +82,7 @@ Markdown body
 - `crates/core/src/compact.rs` — compact form parser (regex-based, sequential greedy)
 - `crates/core/src/block.rs` — block form parser (head/body split on `---`)
 - `crates/core/src/scanner.rs` — HTML comment scanner with UTF-16 tracking
-- `crates/core/src/scope_resolver.rs` — resolves scope to concrete UTF-16 text range (Words, Sentence, Paragraph, Page, Anchor)
+- `crates/core/src/scope_resolver.rs` — resolves scope to concrete UTF-16 text range (Words, Sentence, Paragraph, Page, Anchor, Section, Document, asymmetric variants; backward/bidirectional modes)
 - `src/renderer/widgets.ts` — CalloutWidget, PillWidget, MarkerWidget DOM construction + hover handlers
 - `src/renderer/live-mode.ts` — CM6 decoration layer + editable-range logic
 - `src/renderer/scope-highlight.ts` — CM6 StateEffect/StateField for transient scope highlight mark
@@ -90,4 +91,4 @@ Markdown body
 
 ## Testing
 
-Rust tests cover all parser edge cases extensively (types, scope, certainty, anchors, dates, UTF-16 offsets, code fence skipping, bare annotations) plus scope resolver tests (Words, Sentence, Paragraph, Page, Anchor). TS tests cover JSON deserialization from WASM output (Annotation + ScopeRange). Manual testing in an Obsidian vault is needed for widget rendering and scope hover highlighting.
+Rust tests cover all parser edge cases extensively (types, scope, certainty, anchors, dates, UTF-16 offsets, code fence skipping, bare annotations) plus scope resolver tests (Words, Sentence, Paragraph, Page, Anchor, Section, Document, asymmetric variants, resolution modes, boundary clamping). TS tests cover JSON deserialization from WASM output (Annotation + ScopeRange). Manual testing in an Obsidian vault is needed for widget rendering and scope hover highlighting.

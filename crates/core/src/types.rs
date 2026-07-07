@@ -64,13 +64,58 @@ pub enum Scope {
     Sentence(u8),
     /// `^"text"` — explicit anchor by search key
     Anchor(String),
+    /// `\h` — current markdown heading section
+    Section,
+    /// `\d` — entire document
+    Document,
+    /// `N_M` — N words before, M words after
+    AsymWords(u8, u8),
+    /// `N\sM` — N sentences before, M sentences after
+    AsymSentence(u8, u8),
+    /// `N\pM` — N paragraphs before, M paragraphs after
+    AsymParagraph(u8, u8),
+    /// `N\fM` — N pages before, M pages after
+    AsymPage(u8, u8),
 }
 
 impl Scope {
+    /// Parse the asymmetric form: `N_M` (words) or `N\sM` / `N\pM` / `N\fM`,
+    /// where N and M are single digits.
+    fn try_parse_asymmetric(s: &str) -> Option<Self> {
+        let mut chars = s.chars();
+        let before = chars.next()?.to_digit(10)? as u8;
+        let sep = chars.next()?;
+        let (ctor, after_ch): (fn(u8, u8) -> Self, char) = match sep {
+            '_' => (Self::AsymWords, chars.next()?),
+            '\\' => {
+                let unit = chars.next()?;
+                let ctor = match unit {
+                    's' => Self::AsymSentence as fn(u8, u8) -> Self,
+                    'p' => Self::AsymParagraph,
+                    'f' => Self::AsymPage,
+                    _ => return None,
+                };
+                (ctor, chars.next()?)
+            }
+            _ => return None,
+        };
+        let after = after_ch.to_digit(10)? as u8;
+        if chars.next().is_some() {
+            return None; // trailing characters — not a bare asymmetric token
+        }
+        Some(ctor(before, after))
+    }
+
     /// Try to parse a scope string. Returns None for unrecognized patterns.
     pub fn try_parse(s: &str) -> Option<Self> {
-        if !s.is_empty() && s.starts_with('_') && s.chars().all(|c| c == '_') {
+        if let Some(asym) = Self::try_parse_asymmetric(s) {
+            Some(asym)
+        } else if !s.is_empty() && s.starts_with('_') && s.chars().all(|c| c == '_') {
             Some(Self::Words(s.len() as u8))
+        } else if s == r"\h" {
+            Some(Self::Section)
+        } else if s == r"\d" {
+            Some(Self::Document)
         } else if s.starts_with(r"\p") {
             let rest = &s[2..];
             if rest.is_empty() || rest.chars().all(|c| c == 'p') {
@@ -311,6 +356,103 @@ mod tests {
         assert_eq!(Scope::from_str(r"\p__"), Scope::from_str(r"\pp"));
         assert_eq!(Scope::from_str(r"\f___"), Scope::from_str(r"\fff"));
         assert_eq!(Scope::from_str(r"\s__"), Scope::from_str(r"\ss"));
+    }
+
+    // Section / Document scopes
+
+    #[test]
+    fn scope_section() {
+        assert_eq!(Scope::from_str(r"\h"), Scope::Section);
+        assert_eq!(Scope::try_parse(r"\h"), Some(Scope::Section));
+    }
+
+    #[test]
+    fn scope_document() {
+        assert_eq!(Scope::from_str(r"\d"), Scope::Document);
+        assert_eq!(Scope::try_parse(r"\d"), Some(Scope::Document));
+    }
+
+    #[test]
+    fn scope_section_document_no_suffixes() {
+        assert_eq!(Scope::try_parse(r"\hh"), None);
+        assert_eq!(Scope::try_parse(r"\h_"), None);
+        assert_eq!(Scope::try_parse(r"\dd"), None);
+        assert_eq!(Scope::try_parse(r"\d_"), None);
+    }
+
+    #[test]
+    fn scope_section_document_serde() {
+        let json = serde_json::to_string(&Scope::Section).unwrap();
+        assert_eq!(json, r#"{"kind":"section"}"#);
+        assert_eq!(serde_json::from_str::<Scope>(&json).unwrap(), Scope::Section);
+
+        let json = serde_json::to_string(&Scope::Document).unwrap();
+        assert_eq!(json, r#"{"kind":"document"}"#);
+        assert_eq!(serde_json::from_str::<Scope>(&json).unwrap(), Scope::Document);
+    }
+
+    // Asymmetric scopes
+
+    #[test]
+    fn scope_asym_words() {
+        assert_eq!(Scope::try_parse("3_1"), Some(Scope::AsymWords(3, 1)));
+        assert_eq!(Scope::try_parse("0_2"), Some(Scope::AsymWords(0, 2)));
+        assert_eq!(Scope::try_parse("9_9"), Some(Scope::AsymWords(9, 9)));
+    }
+
+    #[test]
+    fn scope_asym_sentence() {
+        assert_eq!(Scope::try_parse(r"2\s1"), Some(Scope::AsymSentence(2, 1)));
+        assert_eq!(Scope::try_parse(r"0\s2"), Some(Scope::AsymSentence(0, 2)));
+    }
+
+    #[test]
+    fn scope_asym_paragraph() {
+        assert_eq!(Scope::try_parse(r"3\p1"), Some(Scope::AsymParagraph(3, 1)));
+        assert_eq!(Scope::try_parse(r"2\p0"), Some(Scope::AsymParagraph(2, 0)));
+    }
+
+    #[test]
+    fn scope_asym_page() {
+        assert_eq!(Scope::try_parse(r"2\f0"), Some(Scope::AsymPage(2, 0)));
+        assert_eq!(Scope::try_parse(r"1\f1"), Some(Scope::AsymPage(1, 1)));
+    }
+
+    #[test]
+    fn scope_asym_invalid() {
+        assert_eq!(Scope::try_parse("12_1"), None); // multi-digit
+        assert_eq!(Scope::try_parse("3_12"), None);
+        assert_eq!(Scope::try_parse(r"3\x1"), None); // unknown unit
+        assert_eq!(Scope::try_parse(r"3\h1"), None); // section has no asym form
+        assert_eq!(Scope::try_parse(r"3\d1"), None); // document has no asym form
+        assert_eq!(Scope::try_parse("_3"), None);
+        assert_eq!(Scope::try_parse("3_"), None);
+        assert_eq!(Scope::try_parse(r"2\s"), None);
+        assert_eq!(Scope::try_parse("31"), None);
+    }
+
+    #[test]
+    fn scope_asym_serde() {
+        let scope = Scope::AsymWords(3, 1);
+        let json = serde_json::to_string(&scope).unwrap();
+        assert_eq!(json, r#"{"kind":"asym_words","value":[3,1]}"#);
+        assert_eq!(serde_json::from_str::<Scope>(&json).unwrap(), scope);
+
+        let scope = Scope::AsymSentence(0, 2);
+        let json = serde_json::to_string(&scope).unwrap();
+        assert_eq!(json, r#"{"kind":"asym_sentence","value":[0,2]}"#);
+        assert_eq!(serde_json::from_str::<Scope>(&json).unwrap(), scope);
+
+        let scope = Scope::AsymParagraph(2, 1);
+        assert_eq!(
+            serde_json::from_str::<Scope>(&serde_json::to_string(&scope).unwrap()).unwrap(),
+            scope
+        );
+        let scope = Scope::AsymPage(2, 0);
+        assert_eq!(
+            serde_json::from_str::<Scope>(&serde_json::to_string(&scope).unwrap()).unwrap(),
+            scope
+        );
     }
 
     #[test]
