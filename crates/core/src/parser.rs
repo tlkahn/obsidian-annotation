@@ -1,7 +1,22 @@
 use crate::types::Annotation;
 use crate::scanner::scan_comments;
-use crate::compact::parse_compact;
+use crate::compact::parse_compact_inner;
 use crate::block::{is_block_form, parse_block};
+use crate::id::extract_id;
+
+/// Classify a comment's inner text: extract the optional leading ID, parse
+/// the remainder in block or compact form, and report whether it has
+/// detectable structure. Single entry point shared by `parse_annotations`
+/// and `is_structured_annotation` so the two can't diverge.
+pub(crate) fn classify(inner: &str) -> (Option<String>, Annotation, bool) {
+    let (id, rest) = extract_id(inner);
+    if is_block_form(rest) {
+        (id, parse_block(rest), true)
+    } else {
+        let (ann, structured) = parse_compact_inner(rest);
+        (id, ann, structured)
+    }
+}
 
 /// Parse all annotation comments in a document.
 /// Returns annotations ordered by their position in the document.
@@ -10,13 +25,10 @@ pub fn parse_annotations(content: &str) -> Vec<Annotation> {
     let mut annotations = Vec::with_capacity(raw_comments.len());
 
     for rc in raw_comments {
-        let mut ann = if is_block_form(&rc.inner) {
-            parse_block(&rc.inner)
-        } else {
-            parse_compact(&rc.inner)
-        };
+        let (id, mut ann, _) = classify(&rc.inner);
 
-        // Fill in position and original text from scanner
+        // Fill in position, id, and original text from scanner
+        ann.id = id;
         ann.char_start = rc.char_start;
         ann.char_end = rc.char_end;
         ann.original = rc.original;
@@ -48,6 +60,51 @@ mod tests {
     }
 
     #[test]
+    fn compact_with_id() {
+        let doc = r"<!---[my-note-id] n: \p | body text --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns.len(), 1);
+        assert_eq!(anns[0].id, Some("my-note-id".to_string()));
+        assert_eq!(anns[0].annotation_type, AnnotationType::Note);
+        assert_eq!(anns[0].scope, Scope::Paragraph(1));
+        assert_eq!(anns[0].body, Some("body text".to_string()));
+    }
+
+    #[test]
+    fn compact_with_spaced_id() {
+        // Spec grammar shows `<!--- [ID] TYPE ...`; leading whitespace is fine
+        let doc = "<!--- [id42] q? | is this right? --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].id, Some("id42".to_string()));
+        assert_eq!(anns[0].annotation_type, AnnotationType::Question);
+    }
+
+    #[test]
+    fn compact_without_id() {
+        let doc = "<!--- n: | no id here --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].id, None);
+    }
+
+    #[test]
+    fn invalid_id_falls_back_to_body() {
+        let doc = "<!--- [*bold*] note --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].id, None);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Bare);
+        assert_eq!(anns[0].body, Some("[*bold*] note".to_string()));
+    }
+
+    #[test]
+    fn id_with_bare_body() {
+        let doc = "<!---[x1] hello world --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].id, Some("x1".to_string()));
+        assert_eq!(anns[0].annotation_type, AnnotationType::Bare);
+        assert_eq!(anns[0].body, Some("hello world".to_string()));
+    }
+
+    #[test]
     fn single_block_annotation() {
         let doc = "Text before.\n<!---\nn!\n\\p\n@2026-03-28\n---\nThe body.\n--->\nText after.";
         let anns = parse_annotations(doc);
@@ -57,6 +114,28 @@ mod tests {
         assert_eq!(anns[0].scope, Scope::Paragraph(1));
         assert_eq!(anns[0].form, AnnotationForm::Block);
         assert_eq!(anns[0].body, Some("The body.".to_string()));
+    }
+
+    #[test]
+    fn block_with_id() {
+        let doc = "<!---[550e8400-e29b-41d4-a716-446655440000]\nn!\n\\p\n@2026-03-28\n---\nBody text here.\n--->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns.len(), 1);
+        assert_eq!(anns[0].form, AnnotationForm::Block);
+        assert_eq!(anns[0].id, Some("550e8400-e29b-41d4-a716-446655440000".to_string()));
+        assert_eq!(anns[0].annotation_type, AnnotationType::Note);
+        assert_eq!(anns[0].certainty, Certainty::Firm);
+        assert_eq!(anns[0].scope, Scope::Paragraph(1));
+        assert_eq!(anns[0].date, Some("2026-03-28".to_string()));
+        assert_eq!(anns[0].body, Some("Body text here.".to_string()));
+    }
+
+    #[test]
+    fn block_without_id() {
+        let doc = "<!---\ncf\n---\nNo id.\n--->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].id, None);
+        assert_eq!(anns[0].form, AnnotationForm::Block);
     }
 
     #[test]
@@ -142,6 +221,22 @@ mod tests {
         assert_eq!(anns[0].scope, Scope::Words(1));
         assert_eq!(anns[0].body, Some("cf. Tibetan version".to_string()));
         assert_eq!(anns[0].date, Some("2026-03".to_string()));
+    }
+
+    #[test]
+    fn llm_type_integration() {
+        let doc = "<!--- llm | summarize entire document --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].annotation_type, AnnotationType::Llm);
+    }
+
+    #[test]
+    fn thread_with_id_integration() {
+        let doc = "<!---[t1] th? | thread here --->";
+        let anns = parse_annotations(doc);
+        assert_eq!(anns[0].id, Some("t1".to_string()));
+        assert_eq!(anns[0].annotation_type, AnnotationType::Thread);
+        assert_eq!(anns[0].certainty, Certainty::Tentative);
     }
 
     #[test]

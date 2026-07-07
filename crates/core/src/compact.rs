@@ -22,13 +22,15 @@ pub fn parse_compact(inner: &str) -> Annotation {
 
 /// Whether the inner text has detectable annotation structure (type keyword,
 /// certainty mark, scope token, anchor, pipe, date) or is block form.
-/// Plain prose comments return false.
+/// Plain prose comments return false. An ID alone is not structure: a bare
+/// [word] prefix is common in plain prose comments, and the migrate tool
+/// must not rewrite those.
 pub fn is_structured_annotation(inner: &str) -> bool {
-    crate::block::is_block_form(inner) || parse_compact_inner(inner).1
+    crate::parser::classify(inner).2
 }
 
 /// Parse the compact form, also returning whether any structure was detected.
-fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
+pub(crate) fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
     let mut remaining = inner;
     let mut annotation_type = AnnotationType::Bare;
     let mut certainty = Certainty::Neutral;
@@ -36,7 +38,7 @@ fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
     let mut is_structured = false;
 
     // Step 1: Try to match type keyword at the start
-    let type_keywords = ["todo", "app", "cf", "tr", "n", "q"];
+    let type_keywords = ["todo", "app", "cf", "tr", "llm", "th", "n", "q"];
     for &kw in &type_keywords {
         if remaining.starts_with(kw) {
             let after = &remaining[kw.len()..];
@@ -132,6 +134,7 @@ fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
         return (
             Annotation {
                 form: AnnotationForm::Compact,
+                id: None,
                 annotation_type: AnnotationType::Bare,
                 certainty: Certainty::Neutral,
                 scope: Scope::Sentence(1),
@@ -148,6 +151,7 @@ fn parse_compact_inner(inner: &str) -> (Annotation, bool) {
     (
         Annotation {
             form: AnnotationForm::Compact,
+            id: None,
             annotation_type,
             certainty,
             scope,
@@ -371,6 +375,51 @@ mod tests {
         assert_eq!(a.scope, b.scope);
     }
 
+    // llm / th types
+
+    #[test]
+    fn llm_type() {
+        let ann = parse_compact("llm | summarize entire document");
+        assert_eq!(ann.annotation_type, AnnotationType::Llm);
+        assert_eq!(ann.body, Some("summarize entire document".to_string()));
+    }
+
+    #[test]
+    fn thread_type_tentative() {
+        let ann = parse_compact("th? | is this Jayaratha?");
+        assert_eq!(ann.annotation_type, AnnotationType::Thread);
+        assert_eq!(ann.certainty, Certainty::Tentative);
+        assert_eq!(ann.body, Some("is this Jayaratha?".to_string()));
+    }
+
+    #[test]
+    fn thread_type_only() {
+        let ann = parse_compact("th");
+        assert_eq!(ann.annotation_type, AnnotationType::Thread);
+        assert_eq!(ann.body, None);
+    }
+
+    #[test]
+    fn llm_with_scope() {
+        let ann = parse_compact(r"llm: \p | rewrite this paragraph");
+        assert_eq!(ann.annotation_type, AnnotationType::Llm);
+        assert_eq!(ann.scope, Scope::Paragraph(1));
+    }
+
+    #[test]
+    fn th_prefix_word_stays_bare() {
+        let ann = parse_compact("throwaway note");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
+        assert_eq!(ann.body, Some("throwaway note".to_string()));
+    }
+
+    #[test]
+    fn llm_prefix_word_stays_bare() {
+        let ann = parse_compact("llms are interesting");
+        assert_eq!(ann.annotation_type, AnnotationType::Bare);
+        assert_eq!(ann.body, Some("llms are interesting".to_string()));
+    }
+
     // is_structured_annotation
 
     #[test]
@@ -406,6 +455,28 @@ mod tests {
     #[test]
     fn structured_block_form() {
         assert!(is_structured_annotation("n\n---\nbody"));
+    }
+
+    #[test]
+    fn id_with_structured_remainder() {
+        assert!(is_structured_annotation("[x1] n: | note"));
+        assert!(is_structured_annotation("[x1] todo! verify @2026-03"));
+    }
+
+    #[test]
+    fn id_alone_is_not_structure() {
+        // A bare [word] must not count as structure: the migrate tool would
+        // otherwise rewrite plain legacy comments like <!-- [TODO] fix --> or
+        // <!-- [1] see footnote --> into rendering annotations.
+        assert!(!is_structured_annotation("[x1] hello"));
+        assert!(!is_structured_annotation("[TODO] fix header wording"));
+        assert!(!is_structured_annotation("[1] see footnote"));
+    }
+
+    #[test]
+    fn unstructured_invalid_id() {
+        assert!(!is_structured_annotation("[*b*] hello"));
+        assert!(!is_structured_annotation("[[Wiki Link]] prose"));
     }
 
     #[test]

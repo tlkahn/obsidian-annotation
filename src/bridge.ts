@@ -2,7 +2,8 @@ import { FileSystemAdapter } from "obsidian";
 
 export interface Annotation {
     form: "compact" | "block";
-    annotation_type: "note" | "question" | "todo" | "crossref" | "apparatus" | "translation" | "bare";
+    id: string | null;
+    annotation_type: "note" | "question" | "todo" | "crossref" | "apparatus" | "translation" | "llm" | "thread" | "bare";
     certainty: "tentative" | "firm" | "neutral";
     scope:
         | { kind: "words"; value: number }

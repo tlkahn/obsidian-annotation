@@ -8,6 +8,7 @@ describe("Annotation JSON deserialization", () => {
     it("parses a compact note annotation", () => {
         const json: Annotation = {
             form: "compact",
+            id: null,
             annotation_type: "note",
             certainty: "tentative",
             scope: { kind: "words", value: 2 },
@@ -31,6 +32,7 @@ describe("Annotation JSON deserialization", () => {
     it("parses a block crossref annotation", () => {
         const json: Annotation = {
             form: "block",
+            id: null,
             annotation_type: "crossref",
             certainty: "neutral",
             scope: { kind: "anchor", value: "anuttara" },
@@ -52,6 +54,7 @@ describe("Annotation JSON deserialization", () => {
     it("parses a bare annotation", () => {
         const json: Annotation = {
             form: "compact",
+            id: null,
             annotation_type: "bare",
             certainty: "neutral",
             scope: { kind: "sentence", value: 1 },
@@ -70,6 +73,7 @@ describe("Annotation JSON deserialization", () => {
     it("parses an apparatus annotation", () => {
         const json: Annotation = {
             form: "compact",
+            id: null,
             annotation_type: "apparatus",
             certainty: "neutral",
             scope: { kind: "sentence", value: 1 },
@@ -81,6 +85,59 @@ describe("Annotation JSON deserialization", () => {
         };
 
         expect(json.annotation_type).toBe("apparatus");
+    });
+
+    it("parses an annotation with an id", () => {
+        const json: Annotation = {
+            form: "compact",
+            id: "my-note-id",
+            annotation_type: "note",
+            certainty: "neutral",
+            scope: { kind: "paragraph", value: 1 },
+            body: "body text",
+            date: null,
+            char_start: 0,
+            char_end: 44,
+            original: "<!---[my-note-id] n: \\p | body text --->",
+        };
+
+        expect(json.id).toBe("my-note-id");
+    });
+
+    it("parses an llm annotation without an id", () => {
+        const json: Annotation = {
+            form: "compact",
+            id: null,
+            annotation_type: "llm",
+            certainty: "neutral",
+            scope: { kind: "sentence", value: 1 },
+            body: "summarize entire document",
+            date: null,
+            char_start: 0,
+            char_end: 40,
+            original: "<!--- llm | summarize entire document --->",
+        };
+
+        expect(json.annotation_type).toBe("llm");
+        expect(json.id).toBeNull();
+    });
+
+    it("parses a thread annotation", () => {
+        const json: Annotation = {
+            form: "block",
+            id: "t1",
+            annotation_type: "thread",
+            certainty: "tentative",
+            scope: { kind: "sentence", value: 1 },
+            body: "A conversational thread.",
+            date: null,
+            char_start: 0,
+            char_end: 50,
+            original: "<!---[t1]\nth?\n---\nA conversational thread.\n--->",
+        };
+
+        expect(json.annotation_type).toBe("thread");
+        expect(json.id).toBe("t1");
     });
 
     it("handles all scope types", () => {
