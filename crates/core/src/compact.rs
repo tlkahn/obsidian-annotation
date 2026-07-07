@@ -24,10 +24,10 @@ pub fn parse_compact(inner: &str) -> Annotation {
 /// certainty mark, scope token, anchor, pipe, date) or is block form.
 /// Plain prose comments return false.
 pub fn is_structured_annotation(inner: &str) -> bool {
-    let (id, remainder) = crate::id::extract_id(inner);
-    id.is_some()
-        || crate::block::is_block_form(remainder)
-        || parse_compact_inner(remainder).1
+    // An ID alone is not structure: a bare [word] prefix is common in plain
+    // prose comments, and the migrate tool must not rewrite those.
+    let (_, remainder) = crate::id::extract_id(inner);
+    crate::block::is_block_form(remainder) || parse_compact_inner(remainder).1
 }
 
 /// Parse the compact form, also returning whether any structure was detected.
@@ -459,9 +459,19 @@ mod tests {
     }
 
     #[test]
-    fn structured_valid_id() {
-        // A valid ID counts as structure even with a bare body
-        assert!(is_structured_annotation("[x1] hello"));
+    fn id_with_structured_remainder() {
+        assert!(is_structured_annotation("[x1] n: | note"));
+        assert!(is_structured_annotation("[x1] todo! verify @2026-03"));
+    }
+
+    #[test]
+    fn id_alone_is_not_structure() {
+        // A bare [word] must not count as structure: the migrate tool would
+        // otherwise rewrite plain legacy comments like <!-- [TODO] fix --> or
+        // <!-- [1] see footnote --> into rendering annotations.
+        assert!(!is_structured_annotation("[x1] hello"));
+        assert!(!is_structured_annotation("[TODO] fix header wording"));
+        assert!(!is_structured_annotation("[1] see footnote"));
     }
 
     #[test]
