@@ -94,7 +94,7 @@ export function createLiveModeExtension(plugin: AnnotationPlugin): Extension {
                     // Block annotations always get callout widget
                     widget = new CalloutWidget(
                         ann, start, end,
-                        plugin.app, file.path, plugin,
+                        plugin.app, file.path, plugin, plugin.bridge,
                     );
                 } else if (isFootnoteMode) {
                     // Compact annotations in footnote mode get marker widget

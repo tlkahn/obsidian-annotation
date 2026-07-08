@@ -67,6 +67,7 @@ export class CalloutWidget extends WidgetType {
         private readonly app: App,
         private readonly sourcePath: string,
         private readonly component: Component,
+        private readonly bridge: WasmBridge,
     ) {
         super();
     }
@@ -104,6 +105,10 @@ export class CalloutWidget extends WidgetType {
         // Fold toggle
         const foldIcon = header.createSpan({ cls: "annotation-callout-fold" });
         foldIcon.textContent = "▾";
+
+        // Hover on the header (not the whole wrapper, to avoid flicker while
+        // interacting with the body or fold) → highlight scoped text
+        addScopeHoverHandlers(header, view, this.annotation, this.charStart, this.bridge);
 
         // Body (collapsible)
         const body = wrapper.createDiv({ cls: "annotation-callout-content" });
