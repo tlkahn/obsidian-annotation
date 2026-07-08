@@ -332,8 +332,12 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
         return None;
     }
 
-    // Split into sentences using sentenza
-    let sentences = sentenza::split_sentences(paragraph, lang);
+    // Blank annotation comments first: sentenza's preprocessing would mangle
+    // them beyond recognition (see `blank_comments`). Blanking is
+    // length-preserving, so offsets in the blanked text equal offsets in the
+    // original, and `ws_flexible_find` tolerates the whitespace runs it leaves.
+    let blanked = blank_comments(paragraph);
+    let sentences = sentenza::split_sentences(&blanked, lang);
     if sentences.is_empty() {
         return None;
     }
@@ -342,7 +346,7 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
     // location handles both sentenza's whitespace normalization and
     // duplicated sentence text.
     let take = n.min(sentences.len());
-    let positions = locate_sentences(paragraph, &sentences)?;
+    let positions = locate_sentences(&blanked, &sentences)?;
     let first_start = positions[positions.len() - take].0;
     let last_end = positions[positions.len() - 1].1;
 
@@ -1341,6 +1345,34 @@ mod tests {
         // Should highlight only the second sentence (with its original double spaces)
         assert_eq!(start, 16); // after "First sentence. "
         assert_eq!(end, ann_start);
+    }
+
+    // ── HTML comment blanking in sentence scope (issue #14) ──
+
+    #[test]
+    fn sentence_backward_comment_in_same_paragraph() {
+        // Exact repro from issue #14: an earlier annotation in the same
+        // paragraph gets mangled by sentenza preprocessing (`<!---` → `<!—`),
+        // so the sentence containing it could not be located and the whole
+        // paragraph failed to resolve.
+        let content = "Some text here. Final sentence. <!--- n | first note --->\n\n<!--- n | second note --->\n\nNext paragraph.";
+        let ann = content.rfind("<!--- n | second note --->").unwrap();
+        let ann_end = ann + "<!--- n | second note --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Final sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Final sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_comment_inside_sentence() {
+        // A comment interrupting the target sentence is blanked away; the
+        // resolved range still covers the interrupted sentence end to end.
+        let content = "First one. Beta <!--- n | x ---> sentence continues here.<!--- target --->";
+        let ann = content.find("<!--- target --->").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Beta").unwrap();
+        let end = content.find("here.").unwrap() + "here.".len();
+        assert_eq!(result, Some((start, end)));
     }
 
     // ── ws_flexible_find unit tests ──
