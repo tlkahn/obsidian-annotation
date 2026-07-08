@@ -353,43 +353,35 @@ fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(
     }
 }
 
-/// Locate sentences in `paragraph` sequentially: each search starts at the
-/// previous located sentence's end, so duplicated sentence text cannot
-/// re-match an earlier occurrence. A sentence that cannot be located (e.g.
-/// sentenza normalized a prose dash run to an em dash, so the returned text
-/// no longer appears in the original) is skipped — the cursor stays put —
-/// rather than failing the whole paragraph. Returns byte ranges relative to
-/// `paragraph`; may be shorter than `sentences`.
-fn locate_sentences(paragraph: &str, sentences: &[String]) -> Vec<(usize, usize)> {
+/// Split an already-blanked paragraph into sentences and locate each one
+/// sequentially: each search starts at the previous located sentence's end,
+/// so duplicated sentence text cannot re-match an earlier occurrence.
+///
+/// Tri-state result: `None` means some sentence failed to locate (a
+/// normalization `ws_flexible_find` cannot reverse, e.g. German quote
+/// rewriting) — resolution must fail rather than guess at a range;
+/// `Some(vec![])` means sentenza produced no sentences (whitespace-only
+/// slice); `Some(positions)` means every sentence was located. Byte ranges
+/// are relative to `paragraph`.
+fn located_sentences(paragraph: &str, lang: &str) -> Option<Vec<(usize, usize)>> {
+    let sentences = sentenza::split_sentences(paragraph, lang);
     let mut positions = Vec::with_capacity(sentences.len());
     let mut cursor = 0;
-    for sentence in sentences {
-        if let Some((start, end)) = ws_flexible_find(paragraph, sentence, cursor) {
-            positions.push((start, end));
-            cursor = end;
-        }
+    for sentence in &sentences {
+        let (start, end) = ws_flexible_find(paragraph, sentence, cursor)?;
+        positions.push((start, end));
+        cursor = end;
     }
-    positions
-}
-
-/// Split `paragraph` into sentences and locate each one, blanking annotation
-/// comments first: sentenza's preprocessing would mangle them beyond
-/// recognition (see `blank_comments`). Blanking is length-preserving, so
-/// offsets in the blanked text equal offsets in the original, and
-/// `ws_flexible_find` tolerates the whitespace runs it leaves. Returns byte
-/// ranges relative to `paragraph`; empty if nothing is locatable.
-fn located_sentences(paragraph: &str, lang: &str) -> Vec<(usize, usize)> {
-    let blanked = blank_comments(paragraph);
-    let sentences = sentenza::split_sentences(&blanked, lang);
-    locate_sentences(&blanked, &sentences)
+    Some(positions)
 }
 
 /// Byte range of the last N sentences before `byte_start` using sentenza.
 /// Extracts the current paragraph (up to `byte_start`) and splits into
-/// sentences. A paragraph that yields no locatable sentences (e.g. it holds
-/// only annotation comments, which blank to whitespace) is skipped and the
-/// walk continues into the preceding paragraph; sentence counting stays
-/// within the single paragraph that first yields locatable sentences.
+/// sentences. A paragraph that is empty after comment blanking (it held
+/// only annotation comments) is skipped and the walk continues into the
+/// preceding paragraph; sentence counting stays within the single paragraph
+/// that first yields sentences. A prose paragraph whose sentences cannot be
+/// located fails resolution outright — no highlight beats a wrong one.
 fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
     // Blank the whole document up front: newlines inside block-annotation
     // bodies become spaces, so the `rfind("\n\n")` paragraph split below can
@@ -410,10 +402,16 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
         let para_byte_start = trimmed.rfind("\n\n").map(|i| i + 2).unwrap_or(0);
         let paragraph = &trimmed[para_byte_start..];
 
-        let positions = located_sentences(paragraph, lang);
+        // A sentence that fails to locate is a normalization we cannot
+        // reverse: fail resolution (no highlight) rather than skip the
+        // sentence and highlight the wrong range.
+        let positions = located_sentences(paragraph, lang)?;
 
         if positions.is_empty() {
-            if para_byte_start == 0 {
+            // Walk past only paragraphs that are truly empty after comment
+            // blanking; a prose paragraph that produced no sentences must
+            // not pull the highlight into an earlier paragraph.
+            if !paragraph.trim().is_empty() || para_byte_start == 0 {
                 return None;
             }
             trimmed = trimmed[..para_byte_start - 2].trim_end();
@@ -455,7 +453,7 @@ fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Opti
         return None;
     }
 
-    let positions = located_sentences(paragraph, lang);
+    let positions = located_sentences(paragraph, lang)?;
     if positions.is_empty() {
         return None;
     }
@@ -1468,12 +1466,47 @@ mod tests {
     #[test]
     fn sentence_backward_standard_comment_degrades_gracefully() {
         // Standard <!-- --> comments are NOT blanked (they are the opt-out),
-        // but their mangled sentence is skipped instead of nuking resolution.
+        // but the dash-aware matcher locates their sentence anyway (needle
+        // "<!—" matches haystack "<!--"), so resolution still succeeds.
         let content = "Early <!-- plain comment --> words. Clean final sentence.<!--- n | x --->";
         let ann = content.find("<!---").unwrap();
         let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
         let start = content.find("Clean final sentence.").unwrap();
         assert_eq!(result, Some((start, start + "Clean final sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_dash_sentence_last() {
+        // The dash-run sentence is itself the resolution target: it must be
+        // highlighted, not silently skipped in favor of the sentence before it.
+        let content = "Good sentence. Wait -- what.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Wait").unwrap();
+        assert_eq!(result, Some((start, ann)));
+    }
+
+    #[test]
+    fn sentence_backward_duplicate_after_dash() {
+        // If the dash sentence were skipped, the cursor would not advance and
+        // the duplicated "Go home." would re-match its first occurrence.
+        let content = "Stop -- Go home. Go home.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.rfind("Go home.").unwrap();
+        assert_eq!(result, Some((start, ann)));
+    }
+
+    #[test]
+    fn sentence_backward_unlocatable_prose_does_not_walk_past() {
+        // German quote rewriting (»…« → "…") is not round-trippable, so the
+        // near paragraph's sentence cannot be located. Resolution must fail
+        // (no highlight) instead of walking past the near prose paragraph
+        // and highlighting the far one.
+        let content = "Far away prose.\n\n»Nahe« Zitat hier.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "de", ResolutionMode::Backward);
+        assert_eq!(result, None);
     }
 
     #[test]
