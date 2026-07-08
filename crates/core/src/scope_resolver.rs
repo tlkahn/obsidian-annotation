@@ -225,6 +225,36 @@ fn resolve_asym(
     combine_ranges(content, back, fwd)
 }
 
+/// Blank every `<!---` … `--->` annotation comment in `text`, replacing each span
+/// with spaces byte-for-byte. Length-preserving: `<!---` and `--->` are pure ASCII
+/// (5 and 4 bytes), so every cut lands on a char boundary and all byte offsets in
+/// the result match the original text. An unterminated `<!---` blanks to the end
+/// of the string. Standard `<!-- -->` comments are left untouched.
+///
+/// Rationale: sentenza's preprocessing normalizes dash runs to em dashes (and
+/// collapses comma/space runs), so an annotation comment inside a paragraph comes
+/// back mangled (`<!— … —>`) and can never be located in the original text —
+/// blanking it out before splitting sidesteps the mismatch entirely. Fenced code
+/// blocks are deliberately ignored here: this operates on small paragraph slices,
+/// and the annotation set itself comes from `scanner::scan_comments`, which
+/// already respects fences.
+fn blank_comments(text: &str) -> String {
+    let mut out = text.to_string();
+    let mut search_from = 0;
+    while let Some(rel) = out[search_from..].find("<!---") {
+        let start = search_from + rel;
+        let end = match out[start..].find("--->") {
+            Some(e) => start + e + "--->".len(),
+            None => out.len(),
+        };
+        // SAFETY of offsets: start/end are found via ASCII delimiters, so both
+        // lie on char boundaries; the replacement is the same number of bytes.
+        out.replace_range(start..end, &" ".repeat(end - start));
+        search_from = end;
+    }
+    out
+}
+
 /// Find `needle` in `haystack[start_from..]`, treating any run of whitespace in the
 /// needle as matching any non-empty run of whitespace in the haystack.  This is needed
 /// because sentenza's preprocessing may collapse double spaces, so the returned sentence
@@ -1338,5 +1368,60 @@ mod tests {
     #[test]
     fn ws_flex_no_match() {
         assert_eq!(ws_flexible_find("hello world", "goodbye", 0), None);
+    }
+
+    // ── blank_comments ──
+
+    #[test]
+    fn blank_comments_triple_dash() {
+        let input = "p <!--- note ---> q";
+        let out = blank_comments(input);
+        assert!(!out.contains("<!---"), "annotation comment must be blanked");
+        assert_eq!(out.len(), input.len(), "blanking must preserve byte length");
+        assert_eq!(&out[0..1], "p");
+        assert_eq!(&out[18..19], "q");
+    }
+
+    #[test]
+    fn blank_comments_standard_comment_untouched() {
+        let input = "a <!-- x --> b";
+        assert_eq!(blank_comments(input), input);
+    }
+
+    #[test]
+    fn blank_comments_unclosed() {
+        let input = "keep <!--- oops";
+        let out = blank_comments(input);
+        assert_eq!(out.len(), input.len());
+        assert_eq!(out, format!("keep {}", " ".repeat(input.len() - 5)));
+    }
+
+    #[test]
+    fn blank_comments_multiple() {
+        let input = "One. <!--- a ---> Two. <!--- b ---> Three.";
+        let out = blank_comments(input);
+        assert_eq!(out.len(), input.len());
+        assert!(!out.contains("<!---"));
+        assert_eq!(&out[0..4], "One.");
+        let two = input.find("Two.").unwrap();
+        assert_eq!(&out[two..two + 4], "Two.");
+        let three = input.find("Three.").unwrap();
+        assert_eq!(&out[three..three + 6], "Three.");
+    }
+
+    #[test]
+    fn blank_comments_multibyte_inside() {
+        let input = "café <!--- naïve ---> x";
+        let out = blank_comments(input);
+        assert_eq!(out.len(), input.len(), "byte length preserved with multibyte content");
+        assert!(!out.contains("<!---"));
+        assert!(out.starts_with("café "));
+        assert!(out.ends_with(" x"));
+    }
+
+    #[test]
+    fn blank_comments_no_comment() {
+        let input = "plain text, nothing to blank.";
+        assert_eq!(blank_comments(input), input);
     }
 }
