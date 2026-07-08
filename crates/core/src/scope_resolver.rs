@@ -226,31 +226,27 @@ fn resolve_asym(
 }
 
 /// Blank every `<!---` … `--->` annotation comment in `text`, replacing each span
-/// with spaces byte-for-byte. Length-preserving: `<!---` and `--->` are pure ASCII
-/// (5 and 4 bytes), so every cut lands on a char boundary and all byte offsets in
-/// the result match the original text. An unterminated `<!---` blanks to the end
-/// of the string. Standard `<!-- -->` comments are left untouched.
+/// with spaces byte-for-byte. Length-preserving: each span starts and ends on the
+/// pure-ASCII delimiters, so every cut lands on a char boundary and all byte
+/// offsets in the result match the original text. Standard `<!-- -->` comments
+/// are left untouched.
+///
+/// The spans come from `scanner::comment_byte_ranges`, so blanking covers exactly
+/// what the renderer treats as annotations: fenced-code openers and unterminated
+/// `<!---` are left intact, and closer overlap is handled identically to the
+/// scanner.
 ///
 /// Rationale: sentenza's preprocessing normalizes dash runs to em dashes (and
 /// collapses comma/space runs), so an annotation comment inside a paragraph comes
 /// back mangled (`<!— … —>`) and can never be located in the original text —
-/// blanking it out before splitting sidesteps the mismatch entirely. Fenced code
-/// blocks are deliberately ignored here: this operates on small paragraph slices,
-/// and the annotation set itself comes from `scanner::scan_comments`, which
-/// already respects fences.
+/// blanking it out before splitting sidesteps the mismatch entirely.
 fn blank_comments(text: &str) -> String {
+    let ranges = crate::scanner::comment_byte_ranges(text);
     let mut out = text.to_string();
-    let mut search_from = 0;
-    while let Some(rel) = out[search_from..].find("<!---") {
-        let start = search_from + rel;
-        let end = match out[start..].find("--->") {
-            Some(e) => start + e + "--->".len(),
-            None => out.len(),
-        };
-        // SAFETY of offsets: start/end are found via ASCII delimiters, so both
-        // lie on char boundaries; the replacement is the same number of bytes.
+    for (start, end) in ranges {
+        // Both offsets sit on ASCII delimiters, so they lie on char
+        // boundaries; the replacement is the same number of bytes.
         out.replace_range(start..end, &" ".repeat(end - start));
-        search_from = end;
     }
     out
 }
@@ -339,7 +335,12 @@ fn located_sentences(paragraph: &str, lang: &str) -> Vec<(usize, usize)> {
 /// walk continues into the preceding paragraph; sentence counting stays
 /// within the single paragraph that first yields locatable sentences.
 fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
-    let text_before = &content[..byte_start];
+    // Blank the whole document up front: newlines inside block-annotation
+    // bodies become spaces, so the `rfind("\n\n")` paragraph split below can
+    // never land inside a comment. Blanking is byte-length-preserving, so
+    // every offset computed against `blanked` is valid in `content`.
+    let blanked = blank_comments(content);
+    let text_before = &blanked[..byte_start];
     // `trimmed` stays anchored at content offset 0 as it shrinks, so all
     // returned offsets remain absolute.
     let mut trimmed = text_before.trim_end();
@@ -384,7 +385,10 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
 /// any whitespace is skipped, so resolution never jumps into the next
 /// paragraph.
 fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Option<(usize, usize)> {
-    let after = &content[byte_end..];
+    // Blank the whole document up front (see `sentences_before`): the
+    // `find("\n\n")` paragraph cut below must not land inside a comment.
+    let blanked = blank_comments(content);
+    let after = &blanked[byte_end..];
 
     // Limit to the current paragraph FIRST, then trim within it
     let para_len = after.find("\n\n").unwrap_or(after.len());
@@ -1429,6 +1433,19 @@ mod tests {
     }
 
     #[test]
+    fn sentence_backward_block_annotation_body_blank_line() {
+        // A block annotation whose body contains a blank line: the whole
+        // document is blanked before the paragraph split, so the `\n\n`
+        // inside the comment body no longer masquerades as a paragraph
+        // boundary.
+        let content = "First sentence. <!--- note\n\nmore body --->  Second sentence.<!--- s | x --->";
+        let ann = content.find("<!--- s | x --->").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Second sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Second sentence.".len())));
+    }
+
+    #[test]
     fn sentence_forward_comment_in_forward_paragraph() {
         // Another annotation right after this one, in the same paragraph:
         // the mangled comment fuses into the forward sentence, which then
@@ -1501,10 +1518,10 @@ mod tests {
 
     #[test]
     fn blank_comments_unclosed() {
+        // An unterminated opener is not an annotation (the scanner drops it),
+        // so it is left intact rather than blanked to end-of-string.
         let input = "keep <!--- oops";
-        let out = blank_comments(input);
-        assert_eq!(out.len(), input.len());
-        assert_eq!(out, format!("keep {}", " ".repeat(input.len() - 5)));
+        assert_eq!(blank_comments(input), input);
     }
 
     #[test]
