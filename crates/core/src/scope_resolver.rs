@@ -321,47 +321,54 @@ fn locate_sentences(paragraph: &str, sentences: &[String]) -> Vec<(usize, usize)
 }
 
 /// Byte range of the last N sentences before `byte_start` using sentenza.
-/// Extracts the current paragraph (up to `byte_start`) and splits into sentences.
+/// Extracts the current paragraph (up to `byte_start`) and splits into
+/// sentences. A paragraph that yields no locatable sentences (e.g. it holds
+/// only annotation comments, which blank to whitespace) is skipped and the
+/// walk continues into the preceding paragraph; sentence counting stays
+/// within the single paragraph that first yields locatable sentences.
 fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
     let text_before = &content[..byte_start];
-    let trimmed = text_before.trim_end();
-    if trimmed.is_empty() {
-        return None;
+    // `trimmed` stays anchored at content offset 0 as it shrinks, so all
+    // returned offsets remain absolute.
+    let mut trimmed = text_before.trim_end();
+
+    loop {
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Find the current paragraph: look for the last double-newline before the annotation
+        let para_byte_start = trimmed.rfind("\n\n").map(|i| i + 2).unwrap_or(0);
+        let paragraph = &trimmed[para_byte_start..];
+
+        // Blank annotation comments first: sentenza's preprocessing would mangle
+        // them beyond recognition (see `blank_comments`). Blanking is
+        // length-preserving, so offsets in the blanked text equal offsets in the
+        // original, and `ws_flexible_find` tolerates the whitespace runs it leaves.
+        let blanked = blank_comments(paragraph);
+        let sentences = sentenza::split_sentences(&blanked, lang);
+        let positions = locate_sentences(&blanked, &sentences);
+
+        if positions.is_empty() {
+            if para_byte_start == 0 {
+                return None;
+            }
+            trimmed = trimmed[..para_byte_start - 2].trim_end();
+            continue;
+        }
+
+        // Take the last n locatable sentences (or all if fewer available).
+        // Sequential location handles both sentenza's whitespace normalization
+        // and duplicated sentence text.
+        let take = n.min(positions.len());
+        let first_start = positions[positions.len() - take].0;
+        let last_end = positions[positions.len() - 1].1;
+
+        let scope_start_byte = para_byte_start + first_start;
+        let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
+
+        return Some((scope_start_byte, scope_end_byte));
     }
-
-    // Find the current paragraph: look for the last double-newline before the annotation
-    let para_byte_start = trimmed.rfind("\n\n").map(|i| i + 2).unwrap_or(0);
-    let paragraph = &trimmed[para_byte_start..];
-
-    if paragraph.trim().is_empty() {
-        return None;
-    }
-
-    // Blank annotation comments first: sentenza's preprocessing would mangle
-    // them beyond recognition (see `blank_comments`). Blanking is
-    // length-preserving, so offsets in the blanked text equal offsets in the
-    // original, and `ws_flexible_find` tolerates the whitespace runs it leaves.
-    let blanked = blank_comments(paragraph);
-    let sentences = sentenza::split_sentences(&blanked, lang);
-    if sentences.is_empty() {
-        return None;
-    }
-
-    // Take the last n locatable sentences (or all if fewer available).
-    // Sequential location handles both sentenza's whitespace normalization
-    // and duplicated sentence text.
-    let positions = locate_sentences(&blanked, &sentences);
-    if positions.is_empty() {
-        return None;
-    }
-    let take = n.min(positions.len());
-    let first_start = positions[positions.len() - take].0;
-    let last_end = positions[positions.len() - 1].1;
-
-    let scope_start_byte = para_byte_start + first_start;
-    let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
-
-    Some((scope_start_byte, scope_end_byte))
 }
 
 /// Byte range of the first M sentences following `byte_end` (starting with
@@ -1407,6 +1414,17 @@ mod tests {
         let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
         let start = content.find("Clean final sentence.").unwrap();
         assert_eq!(result, Some((start, start + "Clean final sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_walks_past_standalone_annotation_paragraph() {
+        // The paragraph directly before the annotation is itself just an
+        // annotation comment (blanks to whitespace); backward resolution must
+        // walk past it to the nearest paragraph with locatable prose.
+        let content = "Real prose sentence.\n\n<!--- n | first --->\n\n<!--- n | second --->";
+        let ann = content.rfind("<!--- n | second --->").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, "Real prose sentence.".len())));
     }
 
     // ── ws_flexible_find unit tests ──
