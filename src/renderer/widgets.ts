@@ -34,6 +34,12 @@ function isLinkClick(e: MouseEvent): boolean {
     return !!target.closest("a.internal-link, a.external-link, a[href]");
 }
 
+// The element whose hover currently drives the scope highlight. Tracked so a
+// widget destroyed mid-hover (e.g. a doc edit rebuilds the decoration set)
+// can clear the highlight it left behind — mouseleave never fires for an
+// element that was removed from the DOM.
+let activeScope: { view: EditorView; el: HTMLElement } | null = null;
+
 /** Add mouseenter/mouseleave handlers to highlight the annotation's scope range. */
 function addScopeHoverHandlers(
     el: HTMLElement,
@@ -46,12 +52,27 @@ function addScopeHoverHandlers(
         const content = view.state.doc.toString();
         const range = bridge.resolveScopeRange(content, charStart, annotation.char_end, annotation.scope, "en");
         if (range && range.start < range.end) {
+            activeScope = { view, el };
             dispatchScopeHighlight(view, range.start, range.end);
         }
     });
     el.addEventListener("mouseleave", () => {
+        if (activeScope?.el === el) {
+            activeScope = null;
+        }
         clearScopeHighlight(view);
     });
+}
+
+/** Clear the scope highlight when a destroyed widget's DOM owns it. */
+function clearScopeOnDestroy(dom: HTMLElement): void {
+    if (activeScope && dom.contains(activeScope.el)) {
+        const view = activeScope.view;
+        activeScope = null;
+        // destroy() runs during a CM6 update cycle, where a synchronous
+        // dispatch throws; defer it like the widgets' click handlers do.
+        setTimeout(() => clearScopeHighlight(view), 0);
+    }
 }
 
 /**
@@ -153,6 +174,10 @@ export class CalloutWidget extends WidgetType {
             this.charEnd === other.charEnd
         );
     }
+
+    destroy(dom: HTMLElement): void {
+        clearScopeOnDestroy(dom);
+    }
 }
 
 /**
@@ -231,6 +256,10 @@ export class PillWidget extends WidgetType {
             this.charEnd === other.charEnd
         );
     }
+
+    destroy(dom: HTMLElement): void {
+        clearScopeOnDestroy(dom);
+    }
 }
 
 /**
@@ -287,5 +316,9 @@ export class MarkerWidget extends WidgetType {
             this.charStart === other.charStart &&
             this.charEnd === other.charEnd
         );
+    }
+
+    destroy(dom: HTMLElement): void {
+        clearScopeOnDestroy(dom);
     }
 }
