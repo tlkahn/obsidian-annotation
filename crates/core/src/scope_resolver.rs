@@ -251,47 +251,103 @@ fn blank_comments(text: &str) -> String {
     out
 }
 
-/// Find `needle` in `haystack[start_from..]`, treating any run of whitespace in the
-/// needle as matching any non-empty run of whitespace in the haystack.  This is needed
-/// because sentenza's preprocessing may collapse double spaces, so the returned sentence
-/// text won't exactly match the original paragraph text.
+/// Byte length of the leading `-`/`—` run in `s`.
+fn dash_run_len(s: &str) -> usize {
+    s.chars()
+        .take_while(|&c| c == '-' || c == '—')
+        .map(|c| c.len_utf8())
+        .sum()
+}
+
+/// Try to match `needle` against `haystack` starting exactly at byte offset
+/// `start`, tolerating sentenza's round-trippable preprocessing
+/// normalizations (see `ws_flexible_find`). Returns the byte offset one past
+/// the match end on success.
+fn flexible_match_at(haystack: &str, needle: &str, start: usize) -> Option<usize> {
+    let mut hpos = start;
+    let mut npos = 0;
+    while npos < needle.len() {
+        let nch = needle[npos..].chars().next().unwrap();
+        if nch.is_whitespace() {
+            // A whitespace run in the needle matches any non-empty
+            // whitespace run in the haystack (sentenza collapses \s{2,}
+            // to a single space).
+            npos += needle[npos..]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .map(|c| c.len_utf8())
+                .sum::<usize>();
+            let ws: usize = haystack[hpos..]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .map(|c| c.len_utf8())
+                .sum();
+            if ws == 0 {
+                return None;
+            }
+            hpos += ws;
+        } else if nch == '—' {
+            // sentenza collapses a dash run ([-—]{2,}) to one em dash. An
+            // em dash in the needle therefore matches either a literal em
+            // dash (plus any dash-run tail) or a run of 2+ dashes starting
+            // with `-`. A lone `-` is left alone by sentenza, so it never
+            // matches an em dash.
+            npos += '—'.len_utf8();
+            match haystack[hpos..].chars().next() {
+                Some('—') => {
+                    hpos += '—'.len_utf8();
+                    hpos += dash_run_len(&haystack[hpos..]);
+                }
+                Some('-') => {
+                    let tail = dash_run_len(&haystack[hpos + 1..]);
+                    if tail == 0 {
+                        return None;
+                    }
+                    hpos += 1 + tail;
+                }
+                _ => return None,
+            }
+        } else if nch == ',' {
+            // sentenza collapses a comma run to a single comma.
+            npos += 1;
+            if !haystack[hpos..].starts_with(',') {
+                return None;
+            }
+            hpos += haystack[hpos..].bytes().take_while(|&b| b == b',').count();
+        } else {
+            if !haystack[hpos..].starts_with(nch) {
+                return None;
+            }
+            npos += nch.len_utf8();
+            hpos += nch.len_utf8();
+        }
+    }
+    Some(hpos)
+}
+
+/// Find `needle` in `haystack[start_from..]`, tolerating the normalizations
+/// sentenza's preprocessing applies before sentence splitting: whitespace
+/// runs collapse to one space, comma runs collapse to one comma, and dash
+/// runs (`--`, `---`, mixed `-`/`—`) collapse to one em dash. The returned
+/// sentence text therefore won't exactly match the original paragraph text;
+/// this matcher reverses each of those collapses. Normalizations that are
+/// not round-trippable (German quote rewriting, CJK symbol stripping) are
+/// not handled — such sentences simply fail to match.
 /// Returns `(match_start, match_end)` as byte indices into `haystack`.
 fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(usize, usize)> {
-    let parts: Vec<&str> = needle.split_whitespace().collect();
-    if parts.is_empty() {
+    let needle = needle.trim();
+    if needle.is_empty() {
         return None;
     }
 
-    let mut offset = start_from;
+    // O(n*m) candidate scan; inputs are paragraph-sized.
+    let mut start = start_from;
     loop {
-        let rel_pos = haystack[offset..].find(parts[0])?;
-        let match_start = offset + rel_pos;
-        let mut cursor = match_start + parts[0].len();
-
-        let mut ok = true;
-        for part in &parts[1..] {
-            let rest = &haystack[cursor..];
-            let ws = rest.len() - rest.trim_start().len();
-            if ws == 0 {
-                ok = false;
-                break;
-            }
-            cursor += ws;
-            if haystack[cursor..].starts_with(part) {
-                cursor += part.len();
-            } else {
-                ok = false;
-                break;
-            }
+        if let Some(end) = flexible_match_at(haystack, needle, start) {
+            return Some((start, end));
         }
-
-        if ok {
-            return Some((match_start, cursor));
-        }
-
-        // Advance past current position by one character
-        match haystack[offset + rel_pos..].char_indices().nth(1) {
-            Some((next, _)) => offset += rel_pos + next,
+        match haystack[start..].chars().next() {
+            Some(c) => start += c.len_utf8(),
             None => return None,
         }
     }
@@ -1399,15 +1455,14 @@ mod tests {
     }
 
     #[test]
-    fn sentence_backward_skips_unlocatable_dash_sentence() {
-        // Prose with a dash run: sentenza normalizes "--" to an em dash, so
-        // "Wait -- what." can never be located in the original. The resolver
-        // must skip it and degrade 2 sentences to 1 rather than fail.
+    fn sentence_backward_dash_sentence_now_locatable() {
+        // Prose with a dash run: sentenza normalizes "--" to an em dash, but
+        // the dash-aware matcher locates the sentence anyway, so Sentence(2)
+        // covers both sentences instead of degrading to one.
         let content = "Wait -- what. Good sentence.<!--- n | x --->";
         let ann = content.find("<!---").unwrap();
         let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(2), "en", ResolutionMode::Backward);
-        let start = content.find("Good sentence.").unwrap();
-        assert_eq!(result, Some((start, start + "Good sentence.".len())));
+        assert_eq!(result, Some((0, ann)));
     }
 
     #[test]
@@ -1496,6 +1551,37 @@ mod tests {
     #[test]
     fn ws_flex_no_match() {
         assert_eq!(ws_flexible_find("hello world", "goodbye", 0), None);
+    }
+
+    #[test]
+    fn ws_flex_em_dash_matches_double_hyphen() {
+        // sentenza normalizes "--" to an em dash
+        assert_eq!(ws_flexible_find("Wait -- what.", "Wait — what.", 0), Some((0, 13)));
+    }
+
+    #[test]
+    fn ws_flex_em_dash_matches_triple_hyphen() {
+        assert_eq!(ws_flexible_find("Wait --- what.", "Wait — what.", 0), Some((0, 14)));
+    }
+
+    #[test]
+    fn ws_flex_single_em_dash_exact() {
+        // A literal em dash in the original matches itself
+        assert_eq!(ws_flexible_find("Wait — what.", "Wait — what.", 0), Some((0, "Wait — what.".len())));
+    }
+
+    #[test]
+    fn ws_flex_single_hyphen_not_em() {
+        // sentenza leaves a lone "-" alone, so an em dash in the needle must
+        // never match a single hyphen in the haystack
+        assert_eq!(ws_flexible_find("well-known", "well—known", 0), None);
+        assert_eq!(ws_flexible_find("well-known", "well-known", 0), Some((0, 10)));
+    }
+
+    #[test]
+    fn ws_flex_comma_run() {
+        // sentenza collapses comma runs to a single comma
+        assert_eq!(ws_flexible_find("a,,, b", "a, b", 0), Some((0, 6)));
     }
 
     // ── blank_comments ──
