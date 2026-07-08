@@ -301,18 +301,23 @@ fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(
     }
 }
 
-/// Locate every sentence in `paragraph` sequentially: each search starts at
-/// the previous sentence's end, so duplicated sentence text cannot re-match
-/// an earlier occurrence. Returns byte ranges relative to `paragraph`.
-fn locate_sentences(paragraph: &str, sentences: &[String]) -> Option<Vec<(usize, usize)>> {
+/// Locate sentences in `paragraph` sequentially: each search starts at the
+/// previous located sentence's end, so duplicated sentence text cannot
+/// re-match an earlier occurrence. A sentence that cannot be located (e.g.
+/// sentenza normalized a prose dash run to an em dash, so the returned text
+/// no longer appears in the original) is skipped — the cursor stays put —
+/// rather than failing the whole paragraph. Returns byte ranges relative to
+/// `paragraph`; may be shorter than `sentences`.
+fn locate_sentences(paragraph: &str, sentences: &[String]) -> Vec<(usize, usize)> {
     let mut positions = Vec::with_capacity(sentences.len());
     let mut cursor = 0;
     for sentence in sentences {
-        let (start, end) = ws_flexible_find(paragraph, sentence, cursor)?;
-        positions.push((start, end));
-        cursor = end;
+        if let Some((start, end)) = ws_flexible_find(paragraph, sentence, cursor) {
+            positions.push((start, end));
+            cursor = end;
+        }
     }
-    Some(positions)
+    positions
 }
 
 /// Byte range of the last N sentences before `byte_start` using sentenza.
@@ -342,11 +347,14 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
         return None;
     }
 
-    // Take the last n sentences (or all if fewer available). Sequential
-    // location handles both sentenza's whitespace normalization and
-    // duplicated sentence text.
-    let take = n.min(sentences.len());
-    let positions = locate_sentences(&blanked, &sentences)?;
+    // Take the last n locatable sentences (or all if fewer available).
+    // Sequential location handles both sentenza's whitespace normalization
+    // and duplicated sentence text.
+    let positions = locate_sentences(&blanked, &sentences);
+    if positions.is_empty() {
+        return None;
+    }
+    let take = n.min(positions.len());
     let first_start = positions[positions.len() - take].0;
     let last_end = positions[positions.len() - 1].1;
 
@@ -379,8 +387,11 @@ fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Opti
         return None;
     }
 
-    let take = m.min(sentences.len());
-    let positions = locate_sentences(paragraph, &sentences)?;
+    let positions = locate_sentences(paragraph, &sentences);
+    if positions.is_empty() {
+        return None;
+    }
+    let take = m.min(positions.len());
     let first_start = positions[0].0;
     let last_end = positions[take - 1].1;
 
@@ -1373,6 +1384,29 @@ mod tests {
         let start = content.find("Beta").unwrap();
         let end = content.find("here.").unwrap() + "here.".len();
         assert_eq!(result, Some((start, end)));
+    }
+
+    #[test]
+    fn sentence_backward_skips_unlocatable_dash_sentence() {
+        // Prose with a dash run: sentenza normalizes "--" to an em dash, so
+        // "Wait -- what." can never be located in the original. The resolver
+        // must skip it and degrade 2 sentences to 1 rather than fail.
+        let content = "Wait -- what. Good sentence.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(2), "en", ResolutionMode::Backward);
+        let start = content.find("Good sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Good sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_standard_comment_degrades_gracefully() {
+        // Standard <!-- --> comments are NOT blanked (they are the opt-out),
+        // but their mangled sentence is skipped instead of nuking resolution.
+        let content = "Early <!-- plain comment --> words. Clean final sentence.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Clean final sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Clean final sentence.".len())));
     }
 
     // ── ws_flexible_find unit tests ──
