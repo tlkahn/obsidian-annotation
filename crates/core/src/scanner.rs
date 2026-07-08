@@ -16,23 +16,15 @@ pub(crate) fn utf16_len(s: &str) -> usize {
     s.chars().map(|c| c.len_utf16()).sum()
 }
 
-/// Scan a document for triple-dash annotation comments (`<!--- --->`),
-/// returning them with UTF-16 offsets. Standard `<!-- -->` comments are ignored.
-///
-/// Skips:
-/// - Comments inside fenced code blocks (``` or ~~~)
-pub fn scan_comments(content: &str) -> Vec<RawComment> {
-    // Pass 1: find code fence byte ranges to exclude
+/// Byte spans (`[start, end)`) of every terminated, non-fenced `<!--- --->`
+/// annotation comment, in document order. Single source of truth for what
+/// counts as an annotation comment: `scan_comments` and the scope resolver's
+/// comment blanking both derive from it. Openers inside fenced code blocks
+/// (``` or ~~~) are skipped; an unterminated opener ends the scan.
+pub(crate) fn comment_byte_ranges(content: &str) -> Vec<(usize, usize)> {
     let fenced_ranges = find_fenced_ranges(content);
-
-    // Pass 2: find all <!--- ---> comments, filtering out those in fenced ranges
-    let mut results = Vec::new();
+    let mut ranges = Vec::new();
     let mut search_from = 0usize; // byte offset
-
-    // Build a parallel UTF-16 offset map: for each byte offset of `<!---`,
-    // compute the UTF-16 offset. We do this incrementally.
-    let mut last_byte = 0usize;
-    let mut utf16_acc = 0usize;
 
     while let Some(rel) = content[search_from..].find("<!---") {
         let open_byte = search_from + rel;
@@ -46,33 +38,48 @@ pub fn scan_comments(content: &str) -> Vec<RawComment> {
         // Find the closing --->
         let after_open = open_byte + 5;
         if let Some(close_rel) = content[after_open..].find("--->") {
-            let close_byte = after_open + close_rel;
-            let end_byte = close_byte + 4;
-
-            // Compute UTF-16 offsets incrementally
-            utf16_acc += utf16_len(&content[last_byte..open_byte]);
-            let comment_utf16_start = utf16_acc;
-
-            let original = &content[open_byte..end_byte];
-            let comment_utf16_end = comment_utf16_start + utf16_len(original);
-
-            let inner_raw = &content[after_open..close_byte];
-            let inner = inner_raw.trim().to_string();
-
-            results.push(RawComment {
-                char_start: comment_utf16_start,
-                char_end: comment_utf16_end,
-                inner,
-                original: original.to_string(),
-            });
-
-            // Advance past this comment
-            last_byte = open_byte;
+            let end_byte = after_open + close_rel + 4;
+            ranges.push((open_byte, end_byte));
             search_from = end_byte;
         } else {
-            // No closing --> found; stop
+            // No closing ---> found; stop
             break;
         }
+    }
+
+    ranges
+}
+
+/// Scan a document for triple-dash annotation comments (`<!--- --->`),
+/// returning them with UTF-16 offsets. Standard `<!-- -->` comments are ignored.
+///
+/// Skips:
+/// - Comments inside fenced code blocks (``` or ~~~)
+pub fn scan_comments(content: &str) -> Vec<RawComment> {
+    let mut results = Vec::new();
+
+    // Build a parallel UTF-16 offset map: for each byte offset of `<!---`,
+    // compute the UTF-16 offset. We do this incrementally.
+    let mut last_byte = 0usize;
+    let mut utf16_acc = 0usize;
+
+    for (open_byte, end_byte) in comment_byte_ranges(content) {
+        utf16_acc += utf16_len(&content[last_byte..open_byte]);
+        let comment_utf16_start = utf16_acc;
+
+        let original = &content[open_byte..end_byte];
+        let comment_utf16_end = comment_utf16_start + utf16_len(original);
+
+        let inner = content[open_byte + 5..end_byte - 4].trim().to_string();
+
+        results.push(RawComment {
+            char_start: comment_utf16_start,
+            char_end: comment_utf16_end,
+            inner,
+            original: original.to_string(),
+        });
+
+        last_byte = open_byte;
     }
 
     results
@@ -345,6 +352,26 @@ mod tests {
         // No ---> closer exists; treated as unclosed
         let doc = "<!--- a -->";
         assert_eq!(scan_comments(doc).len(), 0);
+    }
+
+    // === comment_byte_ranges ===
+
+    #[test]
+    fn comment_byte_ranges_basic() {
+        let doc = "ab <!--- x ---> cd <!--- y --->";
+        let first_end = doc.find(" cd").unwrap();
+        assert_eq!(
+            comment_byte_ranges(doc),
+            vec![(3, first_end), (19, doc.len())]
+        );
+    }
+
+    #[test]
+    fn comment_byte_ranges_skips_fenced_and_unterminated() {
+        let doc = "```\n<!--- fenced --->\n```\n<!--- kept ---> tail <!--- open";
+        let kept_start = doc.find("<!--- kept").unwrap();
+        let kept_end = doc.find(" tail").unwrap();
+        assert_eq!(comment_byte_ranges(doc), vec![(kept_start, kept_end)]);
     }
 
     #[test]

@@ -225,59 +225,149 @@ fn resolve_asym(
     combine_ranges(content, back, fwd)
 }
 
-/// Find `needle` in `haystack[start_from..]`, treating any run of whitespace in the
-/// needle as matching any non-empty run of whitespace in the haystack.  This is needed
-/// because sentenza's preprocessing may collapse double spaces, so the returned sentence
-/// text won't exactly match the original paragraph text.
+/// Blank every `<!---` … `--->` annotation comment in `text`, replacing each span
+/// with spaces byte-for-byte. Length-preserving: each span starts and ends on the
+/// pure-ASCII delimiters, so every cut lands on a char boundary and all byte
+/// offsets in the result match the original text. Standard `<!-- -->` comments
+/// are left untouched.
+///
+/// The spans come from `scanner::comment_byte_ranges`, so blanking covers exactly
+/// what the renderer treats as annotations: fenced-code openers and unterminated
+/// `<!---` are left intact, and closer overlap is handled identically to the
+/// scanner.
+///
+/// Rationale: sentenza's preprocessing normalizes dash runs to em dashes (and
+/// collapses comma/space runs), so an annotation comment inside a paragraph comes
+/// back mangled (`<!— … —>`) and can never be located in the original text —
+/// blanking it out before splitting sidesteps the mismatch entirely.
+fn blank_comments(text: &str) -> String {
+    let ranges = crate::scanner::comment_byte_ranges(text);
+    let mut out = text.to_string();
+    for (start, end) in ranges {
+        // Both offsets sit on ASCII delimiters, so they lie on char
+        // boundaries; the replacement is the same number of bytes.
+        out.replace_range(start..end, &" ".repeat(end - start));
+    }
+    out
+}
+
+/// Byte length of the leading `-`/`—` run in `s`.
+fn dash_run_len(s: &str) -> usize {
+    s.chars()
+        .take_while(|&c| c == '-' || c == '—')
+        .map(|c| c.len_utf8())
+        .sum()
+}
+
+/// Try to match `needle` against `haystack` starting exactly at byte offset
+/// `start`, tolerating sentenza's round-trippable preprocessing
+/// normalizations (see `ws_flexible_find`). Returns the byte offset one past
+/// the match end on success.
+fn flexible_match_at(haystack: &str, needle: &str, start: usize) -> Option<usize> {
+    let mut hpos = start;
+    let mut npos = 0;
+    while npos < needle.len() {
+        let nch = needle[npos..].chars().next().unwrap();
+        if nch.is_whitespace() {
+            // A whitespace run in the needle matches any non-empty
+            // whitespace run in the haystack (sentenza collapses \s{2,}
+            // to a single space).
+            npos += needle[npos..]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .map(|c| c.len_utf8())
+                .sum::<usize>();
+            let ws: usize = haystack[hpos..]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .map(|c| c.len_utf8())
+                .sum();
+            if ws == 0 {
+                return None;
+            }
+            hpos += ws;
+        } else if nch == '—' {
+            // sentenza collapses a dash run ([-—]{2,}) to one em dash. An
+            // em dash in the needle therefore matches either a literal em
+            // dash (plus any dash-run tail) or a run of 2+ dashes starting
+            // with `-`. A lone `-` is left alone by sentenza, so it never
+            // matches an em dash.
+            npos += '—'.len_utf8();
+            match haystack[hpos..].chars().next() {
+                Some('—') => {
+                    hpos += '—'.len_utf8();
+                    hpos += dash_run_len(&haystack[hpos..]);
+                }
+                Some('-') => {
+                    let tail = dash_run_len(&haystack[hpos + 1..]);
+                    if tail == 0 {
+                        return None;
+                    }
+                    hpos += 1 + tail;
+                }
+                _ => return None,
+            }
+        } else if nch == ',' {
+            // sentenza collapses a comma run to a single comma.
+            npos += 1;
+            if !haystack[hpos..].starts_with(',') {
+                return None;
+            }
+            hpos += haystack[hpos..].bytes().take_while(|&b| b == b',').count();
+        } else {
+            if !haystack[hpos..].starts_with(nch) {
+                return None;
+            }
+            npos += nch.len_utf8();
+            hpos += nch.len_utf8();
+        }
+    }
+    Some(hpos)
+}
+
+/// Find `needle` in `haystack[start_from..]`, tolerating the normalizations
+/// sentenza's preprocessing applies before sentence splitting: whitespace
+/// runs collapse to one space, comma runs collapse to one comma, and dash
+/// runs (`--`, `---`, mixed `-`/`—`) collapse to one em dash. The returned
+/// sentence text therefore won't exactly match the original paragraph text;
+/// this matcher reverses each of those collapses. Normalizations that are
+/// not round-trippable (German quote rewriting, CJK symbol stripping) are
+/// not handled — such sentences simply fail to match.
 /// Returns `(match_start, match_end)` as byte indices into `haystack`.
 fn ws_flexible_find(haystack: &str, needle: &str, start_from: usize) -> Option<(usize, usize)> {
-    let parts: Vec<&str> = needle.split_whitespace().collect();
-    if parts.is_empty() {
+    let needle = needle.trim();
+    if needle.is_empty() {
         return None;
     }
 
-    let mut offset = start_from;
+    // O(n*m) candidate scan; inputs are paragraph-sized.
+    let mut start = start_from;
     loop {
-        let rel_pos = haystack[offset..].find(parts[0])?;
-        let match_start = offset + rel_pos;
-        let mut cursor = match_start + parts[0].len();
-
-        let mut ok = true;
-        for part in &parts[1..] {
-            let rest = &haystack[cursor..];
-            let ws = rest.len() - rest.trim_start().len();
-            if ws == 0 {
-                ok = false;
-                break;
-            }
-            cursor += ws;
-            if haystack[cursor..].starts_with(part) {
-                cursor += part.len();
-            } else {
-                ok = false;
-                break;
-            }
+        if let Some(end) = flexible_match_at(haystack, needle, start) {
+            return Some((start, end));
         }
-
-        if ok {
-            return Some((match_start, cursor));
-        }
-
-        // Advance past current position by one character
-        match haystack[offset + rel_pos..].char_indices().nth(1) {
-            Some((next, _)) => offset += rel_pos + next,
+        match haystack[start..].chars().next() {
+            Some(c) => start += c.len_utf8(),
             None => return None,
         }
     }
 }
 
-/// Locate every sentence in `paragraph` sequentially: each search starts at
-/// the previous sentence's end, so duplicated sentence text cannot re-match
-/// an earlier occurrence. Returns byte ranges relative to `paragraph`.
-fn locate_sentences(paragraph: &str, sentences: &[String]) -> Option<Vec<(usize, usize)>> {
+/// Split an already-blanked paragraph into sentences and locate each one
+/// sequentially: each search starts at the previous located sentence's end,
+/// so duplicated sentence text cannot re-match an earlier occurrence.
+///
+/// Tri-state result: `None` means some sentence failed to locate (a
+/// normalization `ws_flexible_find` cannot reverse, e.g. German quote
+/// rewriting) — resolution must fail rather than guess at a range;
+/// `Some(vec![])` means sentenza produced no sentences (whitespace-only
+/// slice); `Some(positions)` means every sentence was located. Byte ranges
+/// are relative to `paragraph`.
+fn located_sentences(paragraph: &str, lang: &str) -> Option<Vec<(usize, usize)>> {
+    let sentences = sentenza::split_sentences(paragraph, lang);
     let mut positions = Vec::with_capacity(sentences.len());
     let mut cursor = 0;
-    for sentence in sentences {
+    for sentence in &sentences {
         let (start, end) = ws_flexible_find(paragraph, sentence, cursor)?;
         positions.push((start, end));
         cursor = end;
@@ -286,40 +376,60 @@ fn locate_sentences(paragraph: &str, sentences: &[String]) -> Option<Vec<(usize,
 }
 
 /// Byte range of the last N sentences before `byte_start` using sentenza.
-/// Extracts the current paragraph (up to `byte_start`) and splits into sentences.
+/// Extracts the current paragraph (up to `byte_start`) and splits into
+/// sentences. A paragraph that is empty after comment blanking (it held
+/// only annotation comments) is skipped and the walk continues into the
+/// preceding paragraph; sentence counting stays within the single paragraph
+/// that first yields sentences. A prose paragraph whose sentences cannot be
+/// located fails resolution outright — no highlight beats a wrong one.
 fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> Option<(usize, usize)> {
-    let text_before = &content[..byte_start];
-    let trimmed = text_before.trim_end();
-    if trimmed.is_empty() {
-        return None;
+    // Blank the whole document up front: newlines inside block-annotation
+    // bodies become spaces, so the `rfind("\n\n")` paragraph split below can
+    // never land inside a comment. Blanking is byte-length-preserving, so
+    // every offset computed against `blanked` is valid in `content`.
+    let blanked = blank_comments(content);
+    let text_before = &blanked[..byte_start];
+    // `trimmed` stays anchored at content offset 0 as it shrinks, so all
+    // returned offsets remain absolute.
+    let mut trimmed = text_before.trim_end();
+
+    loop {
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Find the current paragraph: look for the last double-newline before the annotation
+        let para_byte_start = trimmed.rfind("\n\n").map(|i| i + 2).unwrap_or(0);
+        let paragraph = &trimmed[para_byte_start..];
+
+        // A sentence that fails to locate is a normalization we cannot
+        // reverse: fail resolution (no highlight) rather than skip the
+        // sentence and highlight the wrong range.
+        let positions = located_sentences(paragraph, lang)?;
+
+        if positions.is_empty() {
+            // Walk past only paragraphs that are truly empty after comment
+            // blanking; a prose paragraph that produced no sentences must
+            // not pull the highlight into an earlier paragraph.
+            if !paragraph.trim().is_empty() || para_byte_start == 0 {
+                return None;
+            }
+            trimmed = trimmed[..para_byte_start - 2].trim_end();
+            continue;
+        }
+
+        // Take the last n locatable sentences (or all if fewer available).
+        // Sequential location handles both sentenza's whitespace normalization
+        // and duplicated sentence text.
+        let take = n.min(positions.len());
+        let first_start = positions[positions.len() - take].0;
+        let last_end = positions[positions.len() - 1].1;
+
+        let scope_start_byte = para_byte_start + first_start;
+        let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
+
+        return Some((scope_start_byte, scope_end_byte));
     }
-
-    // Find the current paragraph: look for the last double-newline before the annotation
-    let para_byte_start = trimmed.rfind("\n\n").map(|i| i + 2).unwrap_or(0);
-    let paragraph = &trimmed[para_byte_start..];
-
-    if paragraph.trim().is_empty() {
-        return None;
-    }
-
-    // Split into sentences using sentenza
-    let sentences = sentenza::split_sentences(paragraph, lang);
-    if sentences.is_empty() {
-        return None;
-    }
-
-    // Take the last n sentences (or all if fewer available). Sequential
-    // location handles both sentenza's whitespace normalization and
-    // duplicated sentence text.
-    let take = n.min(sentences.len());
-    let positions = locate_sentences(paragraph, &sentences)?;
-    let first_start = positions[positions.len() - take].0;
-    let last_end = positions[positions.len() - 1].1;
-
-    let scope_start_byte = para_byte_start + first_start;
-    let scope_end_byte = (para_byte_start + last_end).min(trimmed.len());
-
-    Some((scope_start_byte, scope_end_byte))
 }
 
 /// Byte range of the first M sentences following `byte_end` (starting with
@@ -329,7 +439,10 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
 /// any whitespace is skipped, so resolution never jumps into the next
 /// paragraph.
 fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Option<(usize, usize)> {
-    let after = &content[byte_end..];
+    // Blank the whole document up front (see `sentences_before`): the
+    // `find("\n\n")` paragraph cut below must not land inside a comment.
+    let blanked = blank_comments(content);
+    let after = &blanked[byte_end..];
 
     // Limit to the current paragraph FIRST, then trim within it
     let para_len = after.find("\n\n").unwrap_or(after.len());
@@ -340,13 +453,11 @@ fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Opti
         return None;
     }
 
-    let sentences = sentenza::split_sentences(paragraph, lang);
-    if sentences.is_empty() {
+    let positions = located_sentences(paragraph, lang)?;
+    if positions.is_empty() {
         return None;
     }
-
-    let take = m.min(sentences.len());
-    let positions = locate_sentences(paragraph, &sentences)?;
+    let take = m.min(positions.len());
     let first_start = positions[0].0;
     let last_end = positions[take - 1].1;
 
@@ -1313,6 +1424,141 @@ mod tests {
         assert_eq!(end, ann_start);
     }
 
+    // ── HTML comment blanking in sentence scope (issue #14) ──
+
+    #[test]
+    fn sentence_backward_comment_in_same_paragraph() {
+        // Exact repro from issue #14: an earlier annotation in the same
+        // paragraph gets mangled by sentenza preprocessing (`<!---` → `<!—`),
+        // so the sentence containing it could not be located and the whole
+        // paragraph failed to resolve.
+        let content = "Some text here. Final sentence. <!--- n | first note --->\n\n<!--- n | second note --->\n\nNext paragraph.";
+        let ann = content.rfind("<!--- n | second note --->").unwrap();
+        let ann_end = ann + "<!--- n | second note --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Final sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Final sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_comment_inside_sentence() {
+        // A comment interrupting the target sentence is blanked away; the
+        // resolved range still covers the interrupted sentence end to end.
+        let content = "First one. Beta <!--- n | x ---> sentence continues here.<!--- target --->";
+        let ann = content.find("<!--- target --->").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Beta").unwrap();
+        let end = content.find("here.").unwrap() + "here.".len();
+        assert_eq!(result, Some((start, end)));
+    }
+
+    #[test]
+    fn sentence_backward_dash_sentence_now_locatable() {
+        // Prose with a dash run: sentenza normalizes "--" to an em dash, but
+        // the dash-aware matcher locates the sentence anyway, so Sentence(2)
+        // covers both sentences instead of degrading to one.
+        let content = "Wait -- what. Good sentence.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(2), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, ann)));
+    }
+
+    #[test]
+    fn sentence_backward_standard_comment_degrades_gracefully() {
+        // Standard <!-- --> comments are NOT blanked (they are the opt-out),
+        // but the dash-aware matcher locates their sentence anyway (needle
+        // "<!—" matches haystack "<!--"), so resolution still succeeds.
+        let content = "Early <!-- plain comment --> words. Clean final sentence.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Clean final sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Clean final sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_dash_sentence_last() {
+        // The dash-run sentence is itself the resolution target: it must be
+        // highlighted, not silently skipped in favor of the sentence before it.
+        let content = "Good sentence. Wait -- what.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Wait").unwrap();
+        assert_eq!(result, Some((start, ann)));
+    }
+
+    #[test]
+    fn sentence_backward_duplicate_after_dash() {
+        // If the dash sentence were skipped, the cursor would not advance and
+        // the duplicated "Go home." would re-match its first occurrence.
+        let content = "Stop -- Go home. Go home.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.rfind("Go home.").unwrap();
+        assert_eq!(result, Some((start, ann)));
+    }
+
+    #[test]
+    fn sentence_backward_unlocatable_prose_does_not_walk_past() {
+        // German quote rewriting (»…« → "…") is not round-trippable, so the
+        // near paragraph's sentence cannot be located. Resolution must fail
+        // (no highlight) instead of walking past the near prose paragraph
+        // and highlighting the far one.
+        let content = "Far away prose.\n\n»Nahe« Zitat hier.<!--- n | x --->";
+        let ann = content.find("<!---").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "de", ResolutionMode::Backward);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn sentence_backward_walks_past_standalone_annotation_paragraph() {
+        // The paragraph directly before the annotation is itself just an
+        // annotation comment (blanks to whitespace); backward resolution must
+        // walk past it to the nearest paragraph with locatable prose.
+        let content = "Real prose sentence.\n\n<!--- n | first --->\n\n<!--- n | second --->";
+        let ann = content.rfind("<!--- n | second --->").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        assert_eq!(result, Some((0, "Real prose sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_backward_block_annotation_body_blank_line() {
+        // A block annotation whose body contains a blank line: the whole
+        // document is blanked before the paragraph split, so the `\n\n`
+        // inside the comment body no longer masquerades as a paragraph
+        // boundary.
+        let content = "First sentence. <!--- note\n\nmore body --->  Second sentence.<!--- s | x --->";
+        let ann = content.find("<!--- s | x --->").unwrap();
+        let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
+        let start = content.find("Second sentence.").unwrap();
+        assert_eq!(result, Some((start, start + "Second sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_forward_comment_in_forward_paragraph() {
+        // Another annotation right after this one, in the same paragraph:
+        // the mangled comment fuses into the forward sentence, which then
+        // cannot be located. Blanking must apply forward too.
+        let content = "Intro. <!--- n: 0\\s1 | x ---> <!--- other ---> Forward sentence here.";
+        let ann = content.find("<!--- n: 0\\s1 | x --->").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 1), "en", ResolutionMode::Backward);
+        let start = content.find("Forward sentence here.").unwrap();
+        assert_eq!(result, Some((start, start + "Forward sentence here.".len())));
+    }
+
+    #[test]
+    fn bidirectional_sentence_with_comment() {
+        // Bidirectional Sentence(1) is rewritten to AsymSentence(1,1) via
+        // resolve_asym; a comment on the backward side must not break it.
+        let content = "One here. <!--- n | earlier ---> Two here. <!--- n: \\s | x ---> Three here.";
+        let ann = content.find("<!--- n: \\s | x --->").unwrap();
+        let ann_end = ann + "<!--- n: \\s | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Sentence(1), "en", ResolutionMode::Bidirectional);
+        let start = content.find("Two here.").unwrap();
+        let end = content.find("Three here.").unwrap() + "Three here.".len();
+        assert_eq!(result, Some((start, end)));
+    }
+
     // ── ws_flexible_find unit tests ──
 
     #[test]
@@ -1338,5 +1584,91 @@ mod tests {
     #[test]
     fn ws_flex_no_match() {
         assert_eq!(ws_flexible_find("hello world", "goodbye", 0), None);
+    }
+
+    #[test]
+    fn ws_flex_em_dash_matches_double_hyphen() {
+        // sentenza normalizes "--" to an em dash
+        assert_eq!(ws_flexible_find("Wait -- what.", "Wait — what.", 0), Some((0, 13)));
+    }
+
+    #[test]
+    fn ws_flex_em_dash_matches_triple_hyphen() {
+        assert_eq!(ws_flexible_find("Wait --- what.", "Wait — what.", 0), Some((0, 14)));
+    }
+
+    #[test]
+    fn ws_flex_single_em_dash_exact() {
+        // A literal em dash in the original matches itself
+        assert_eq!(ws_flexible_find("Wait — what.", "Wait — what.", 0), Some((0, "Wait — what.".len())));
+    }
+
+    #[test]
+    fn ws_flex_single_hyphen_not_em() {
+        // sentenza leaves a lone "-" alone, so an em dash in the needle must
+        // never match a single hyphen in the haystack
+        assert_eq!(ws_flexible_find("well-known", "well—known", 0), None);
+        assert_eq!(ws_flexible_find("well-known", "well-known", 0), Some((0, 10)));
+    }
+
+    #[test]
+    fn ws_flex_comma_run() {
+        // sentenza collapses comma runs to a single comma
+        assert_eq!(ws_flexible_find("a,,, b", "a, b", 0), Some((0, 6)));
+    }
+
+    // ── blank_comments ──
+
+    #[test]
+    fn blank_comments_triple_dash() {
+        let input = "p <!--- note ---> q";
+        let out = blank_comments(input);
+        assert!(!out.contains("<!---"), "annotation comment must be blanked");
+        assert_eq!(out.len(), input.len(), "blanking must preserve byte length");
+        assert_eq!(&out[0..1], "p");
+        assert_eq!(&out[18..19], "q");
+    }
+
+    #[test]
+    fn blank_comments_standard_comment_untouched() {
+        let input = "a <!-- x --> b";
+        assert_eq!(blank_comments(input), input);
+    }
+
+    #[test]
+    fn blank_comments_unclosed() {
+        // An unterminated opener is not an annotation (the scanner drops it),
+        // so it is left intact rather than blanked to end-of-string.
+        let input = "keep <!--- oops";
+        assert_eq!(blank_comments(input), input);
+    }
+
+    #[test]
+    fn blank_comments_multiple() {
+        let input = "One. <!--- a ---> Two. <!--- b ---> Three.";
+        let out = blank_comments(input);
+        assert_eq!(out.len(), input.len());
+        assert!(!out.contains("<!---"));
+        assert_eq!(&out[0..4], "One.");
+        let two = input.find("Two.").unwrap();
+        assert_eq!(&out[two..two + 4], "Two.");
+        let three = input.find("Three.").unwrap();
+        assert_eq!(&out[three..three + 6], "Three.");
+    }
+
+    #[test]
+    fn blank_comments_multibyte_inside() {
+        let input = "café <!--- naïve ---> x";
+        let out = blank_comments(input);
+        assert_eq!(out.len(), input.len(), "byte length preserved with multibyte content");
+        assert!(!out.contains("<!---"));
+        assert!(out.starts_with("café "));
+        assert!(out.ends_with(" x"));
+    }
+
+    #[test]
+    fn blank_comments_no_comment() {
+        let input = "plain text, nothing to blank.";
+        assert_eq!(blank_comments(input), input);
     }
 }
