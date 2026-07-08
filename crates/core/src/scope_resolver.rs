@@ -320,6 +320,18 @@ fn locate_sentences(paragraph: &str, sentences: &[String]) -> Vec<(usize, usize)
     positions
 }
 
+/// Split `paragraph` into sentences and locate each one, blanking annotation
+/// comments first: sentenza's preprocessing would mangle them beyond
+/// recognition (see `blank_comments`). Blanking is length-preserving, so
+/// offsets in the blanked text equal offsets in the original, and
+/// `ws_flexible_find` tolerates the whitespace runs it leaves. Returns byte
+/// ranges relative to `paragraph`; empty if nothing is locatable.
+fn located_sentences(paragraph: &str, lang: &str) -> Vec<(usize, usize)> {
+    let blanked = blank_comments(paragraph);
+    let sentences = sentenza::split_sentences(&blanked, lang);
+    locate_sentences(&blanked, &sentences)
+}
+
 /// Byte range of the last N sentences before `byte_start` using sentenza.
 /// Extracts the current paragraph (up to `byte_start`) and splits into
 /// sentences. A paragraph that yields no locatable sentences (e.g. it holds
@@ -341,13 +353,7 @@ fn sentences_before(content: &str, byte_start: usize, n: usize, lang: &str) -> O
         let para_byte_start = trimmed.rfind("\n\n").map(|i| i + 2).unwrap_or(0);
         let paragraph = &trimmed[para_byte_start..];
 
-        // Blank annotation comments first: sentenza's preprocessing would mangle
-        // them beyond recognition (see `blank_comments`). Blanking is
-        // length-preserving, so offsets in the blanked text equal offsets in the
-        // original, and `ws_flexible_find` tolerates the whitespace runs it leaves.
-        let blanked = blank_comments(paragraph);
-        let sentences = sentenza::split_sentences(&blanked, lang);
-        let positions = locate_sentences(&blanked, &sentences);
+        let positions = located_sentences(paragraph, lang);
 
         if positions.is_empty() {
             if para_byte_start == 0 {
@@ -389,12 +395,7 @@ fn sentences_after(content: &str, byte_end: usize, m: usize, lang: &str) -> Opti
         return None;
     }
 
-    let sentences = sentenza::split_sentences(paragraph, lang);
-    if sentences.is_empty() {
-        return None;
-    }
-
-    let positions = locate_sentences(paragraph, &sentences);
+    let positions = located_sentences(paragraph, lang);
     if positions.is_empty() {
         return None;
     }
@@ -1425,6 +1426,32 @@ mod tests {
         let ann = content.rfind("<!--- n | second --->").unwrap();
         let result = resolve_scope_range(content, ann, content.len(), &Scope::Sentence(1), "en", ResolutionMode::Backward);
         assert_eq!(result, Some((0, "Real prose sentence.".len())));
+    }
+
+    #[test]
+    fn sentence_forward_comment_in_forward_paragraph() {
+        // Another annotation right after this one, in the same paragraph:
+        // the mangled comment fuses into the forward sentence, which then
+        // cannot be located. Blanking must apply forward too.
+        let content = "Intro. <!--- n: 0\\s1 | x ---> <!--- other ---> Forward sentence here.";
+        let ann = content.find("<!--- n: 0\\s1 | x --->").unwrap();
+        let ann_end = ann + "<!--- n: 0\\s1 | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::AsymSentence(0, 1), "en", ResolutionMode::Backward);
+        let start = content.find("Forward sentence here.").unwrap();
+        assert_eq!(result, Some((start, start + "Forward sentence here.".len())));
+    }
+
+    #[test]
+    fn bidirectional_sentence_with_comment() {
+        // Bidirectional Sentence(1) is rewritten to AsymSentence(1,1) via
+        // resolve_asym; a comment on the backward side must not break it.
+        let content = "One here. <!--- n | earlier ---> Two here. <!--- n: \\s | x ---> Three here.";
+        let ann = content.find("<!--- n: \\s | x --->").unwrap();
+        let ann_end = ann + "<!--- n: \\s | x --->".len();
+        let result = resolve_scope_range(content, ann, ann_end, &Scope::Sentence(1), "en", ResolutionMode::Bidirectional);
+        let start = content.find("Two here.").unwrap();
+        let end = content.find("Three here.").unwrap() + "Three here.".len();
+        assert_eq!(result, Some((start, end)));
     }
 
     // ── ws_flexible_find unit tests ──
